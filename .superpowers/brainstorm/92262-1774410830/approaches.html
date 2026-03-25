@@ -1,0 +1,83 @@
+<h2>How should hooks communicate with the TUI?</h2>
+<p class="subtitle">This is the core architectural decision — how event data flows from Claude Code into the visualizer</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Unix Domain Socket</h3>
+      <p>TUI listens on a UDS. Hooks are tiny shell scripts that pipe stdin JSON to the socket via <code>nc</code> or <code>socat</code>.</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>Zero latency, no serialization overhead</li>
+            <li>No port conflicts — uses a file path, not a network port</li>
+            <li>Simple hook scripts (one-liners)</li>
+            <li>Natural fit for local-only tool</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>Requires <code>nc</code> or <code>socat</code> on the system</li>
+            <li>Slightly harder to debug than HTTP</li>
+          </ul>
+        </div>
+      </div>
+      <p><strong>⭐ Recommended</strong> — simplest, fastest, most Unix-native approach</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Local HTTP Server</h3>
+      <p>TUI runs an HTTP server on localhost. Hooks POST JSON to <code>http://localhost:PORT/events</code>.</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>Easy to debug (curl, browser dev tools)</li>
+            <li>Hooks use <code>curl</code> which is universally available</li>
+            <li>Could later add a web UI alongside the TUI</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>Port allocation — need to pick/discover a free port</li>
+            <li>Slightly more overhead than UDS</li>
+            <li>More code to handle HTTP parsing</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>File-based (append-only log)</h3>
+      <p>Hooks append JSON lines to a file. TUI tails the file (like <code>tail -f</code>).</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>Simplest possible hooks — just <code>cat >> file</code></li>
+            <li>No server component needed</li>
+            <li>Built-in persistence for free</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>Polling introduces latency (or need inotify/kqueue)</li>
+            <li>File locking concerns with concurrent writers</li>
+            <li>Cleanup/rotation needed for long sessions</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
