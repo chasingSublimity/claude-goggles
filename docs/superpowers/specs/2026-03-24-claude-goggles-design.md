@@ -57,14 +57,14 @@ Five hook types are captured:
 | `PreToolUse` | Agent is about to call a tool | `session_id`, `agent_id?`, `tool_name`, `tool_input`, `tool_use_id` |
 | `PostToolUse` | Tool call completed | `session_id`, `agent_id?`, `tool_name`, `tool_input`, `tool_response`, `tool_use_id` |
 | `SubagentStart` | Subagent spawned | `session_id`, `agent_id`, `agent_type` |
-| `SubagentStop` | Subagent finished | `session_id`, `agent_id`, `agent_type`, `last_assistant_message` |
-| `Stop` | Main agent turn ended | `session_id`, `stop_hook_active`, `last_assistant_message` |
+| `SubagentStop` | Subagent finished | `session_id`, `agent_id`, `agent_type`, `agent_transcript_path`, `last_assistant_message` |
+| `Stop` | Main agent turn ended | `session_id`, `transcript_path`, `stop_hook_active`, `last_assistant_message` |
 
 All hook events share a common base: `{ session_id, transcript_path, cwd, hook_event_name }`. The `agent_id` field is present when the event fires inside a subagent context (added in Claude Code v2.1.69). Events from the main agent have no `agent_id`.
 
 **Subagent task description:** When `tool_name` is `"Agent"`, the `tool_input` contains `{ description, prompt, subagent_type }`. We capture `description` as the subagent's task label by correlating the PreToolUse Agent call with the subsequent SubagentStart event.
 
-**Token usage:** Not currently available in hook events (open feature request anthropics/claude-code#11008). For v1, token usage columns will show "—" as a placeholder. When the feature ships, we add parsing with no architectural changes needed.
+**Token usage:** Not directly included in hook event payloads. We obtain per-agent token counts by reading the transcript file on agent completion. `SubagentStop` provides `agent_transcript_path` and `Stop` provides `transcript_path` — both point to JSONL files containing the conversation history including API responses with `usage` fields (`input_tokens`, `output_tokens`). On each stop event, we read the transcript, sum the usage fields, and populate `token_usage` on the agent. Token data appears once an agent completes, not in real-time during execution.
 
 **Parent-child inference:** There is no `parent_id` field in hook events (open request anthropics/claude-code#14859). We infer the tree structure by tracking which agent issued the PreToolUse with `tool_name: "Agent"` — that agent is the parent of the next SubagentStart. Events without `agent_id` belong to the main/root agent.
 
@@ -80,7 +80,7 @@ Session
       ├── status: Idle | Running(tool_name, key_arg) | Completed
       ├── started_at: Instant
       ├── finished_at: Option<Instant>
-      ├── token_usage: Option<TokenUsage> (None until hook API supports it)
+      ├── token_usage: Option<TokenUsage> (populated on agent completion via transcript)
       ├── tool_history: Vec<ToolCall>
       └── children: Vec<Agent>
 ```
@@ -90,8 +90,8 @@ Event application is pure logic (no IO):
 - **PreToolUse** → find agent by ID (or root if no `agent_id`), set status to `Running(tool_name, key_arg)`. The `key_arg` is extracted from `tool_input` by tool type: `file_path` for Read/Write/Edit, `command` (truncated) for Bash, `pattern` for Grep/Glob, `prompt` (truncated) for Agent, and `tool_name` as fallback for unknown tools. If `tool_name` is `"Agent"`, also record `tool_input.description` and `tool_use_id` in a per-agent pending spawn map (keyed by agent ID to handle concurrent spawns safely).
 - **PostToolUse** → find agent, set status to `Idle`, push to `tool_history`
 - **SubagentStart** → insert new child Agent under the parent that issued the pending Agent tool call. Set `task` from the recorded description.
-- **SubagentStop** → find agent by `agent_id`, set status to `Completed`, record `finished_at`
-- **Stop** → set root agent status to `Completed`
+- **SubagentStop** → find agent by `agent_id`, set status to `Completed`, record `finished_at`. Read `agent_transcript_path` JSONL, sum `usage` fields from API responses, set `token_usage`.
+- **Stop** → set root agent status to `Completed`. Read `transcript_path` JSONL, sum `usage` fields, set `token_usage`.
 
 **Malformed events:** Invalid JSON or events missing required fields are silently dropped. A debug counter in the footer shows dropped event count if nonzero.
 
@@ -115,7 +115,7 @@ src/
 
 Critical boundary: **`render/` only depends on `model/`**. It never touches `events/` or the socket. The `Renderer` trait takes an `&AgentTree` and a `&mut Frame` and draws it. This enables swapping renderers without touching data or event logic.
 
-`model/update.rs` is pure functions: `fn apply_event(tree: &mut AgentTree, event: HookEvent)`. No async, no IO — easy to test.
+`model/update.rs` is pure functions for most events: `fn apply_event(tree: &mut AgentTree, event: HookEvent)`. The exception is SubagentStop/Stop, which read the transcript file to extract token usage. This IO is isolated in a `fn parse_transcript_usage(path: &Path) -> Option<TokenUsage>` helper in `events/`, called before `apply_event` — so the model update itself remains pure (it receives the already-parsed `TokenUsage`).
 
 ### Main Loop
 
@@ -128,7 +128,7 @@ Single scrollable list with indentation showing agent hierarchy. Each row shows:
 
 ```
 ● agent-name ─ Task description
-  │ ToolName key/arg · 1m 45s · —
+  │ ToolName key/arg · 1m 45s · 3.1k tok
 ```
 
 - Green `●` for active agents, grey `◯` for completed
