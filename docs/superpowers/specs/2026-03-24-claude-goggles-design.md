@@ -38,11 +38,9 @@ Hooks are one-liner shell commands installed into `~/.claude/settings.json`:
 }
 ```
 
-**Connection lifecycle:** Each hook invocation opens a new UDS connection, writes the JSON payload, and closes when stdin reaches EOF. BSD `nc` (macOS) closes automatically after stdin EOF; GNU `nc` / `ncat` (Linux) also closes after piped input ends. The daemon accepts one connection per event, reads until EOF, closes its end, and parses the result. This is a connection-per-event model — the daemon must handle rapid short-lived connections from parallel agents.
+**Connection lifecycle:** Each hook invocation opens a new UDS connection, writes the JSON payload, and closes when stdin reaches EOF. macOS BSD `nc` closes automatically after stdin EOF. The daemon accepts one connection per event, reads until EOF, closes its end, and parses the result. This is a connection-per-event model — the daemon must handle rapid short-lived connections from parallel agents.
 
 **Silent failure:** `2>/dev/null || true` ensures the hook always exits 0, even if the socket doesn't exist (TUI not running) or `nc` fails. Claude Code continues unaffected.
-
-**Platform note:** The `nc` (netcat) command varies across platforms. macOS ships BSD `nc` which supports `-U` natively and closes after piped stdin EOF. On Linux, `nc` may be `ncat`, `netcat-openbsd`, or GNU netcat — not all support `-U`. The `claude-goggles init` command will detect the available variant and use `socat - UNIX-CONNECT:path` as a fallback.
 
 Why UDS over alternatives:
 - Zero latency, no serialization overhead beyond JSON
@@ -153,7 +151,7 @@ claude-goggles init     # install hooks into ~/.claude/settings.json
 claude-goggles clean    # remove hooks, delete socket
 ```
 
-`init` reads existing `~/.claude/settings.json`, parses it, and appends hook entries to each hook type's array (preserving any existing hooks the user has configured). If a claude-goggles hook is already present, it skips that entry. Writes the file back. Creates `~/.claude-goggles/` if needed. Detects whether `nc -U` or `socat` is available and uses the appropriate command in the hook.
+`init` reads existing `~/.claude/settings.json`, parses it, and appends hook entries to each hook type's array (preserving any existing hooks the user has configured). If a claude-goggles hook is already present, it skips that entry. Writes the file back. Creates `~/.claude-goggles/` if needed.
 
 ## Edge Cases
 
