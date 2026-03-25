@@ -784,25 +784,19 @@ pub fn parse_hook_event(json: &str) -> Option<HookEvent> {
         "SubagentStop" => {
             let agent_id = v.get("agent_id")?.as_str()?.to_string();
             let agent_type = v.get("agent_type").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-            let transcript_path = v.get("agent_transcript_path").and_then(|v| v.as_str()).map(String::from);
-            let token_usage = transcript_path
-                .as_deref()
-                .and_then(|p| transcript::parse_transcript_usage(std::path::Path::new(p)));
+            // NOTE: transcript reading is added in Task 4. Until then, token_usage is None.
             Some(HookEvent::SubagentStop {
                 session_id,
                 agent_id,
                 agent_type,
-                token_usage,
+                token_usage: None,
             })
         }
         "Stop" => {
-            let transcript_path = v.get("transcript_path").and_then(|v| v.as_str()).map(String::from);
-            let token_usage = transcript_path
-                .as_deref()
-                .and_then(|p| transcript::parse_transcript_usage(std::path::Path::new(p)));
+            // NOTE: transcript reading is added in Task 4. Until then, token_usage is None.
             Some(HookEvent::Stop {
                 session_id,
-                token_usage,
+                token_usage: None,
             })
         }
         _ => None,
@@ -986,10 +980,35 @@ pub fn parse_transcript_usage(path: &Path) -> Option<TokenUsage> {
 Run: `cargo test transcript`
 Expected: all 4 tests pass
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Wire up transcript parsing in parse_hook_event**
+
+Update the `SubagentStop` and `Stop` arms in `parse_hook_event` (in `src/events/mod.rs`) to read the transcript. Replace the `token_usage: None` placeholders:
+
+For `SubagentStop`:
+```rust
+            let transcript_path = v.get("agent_transcript_path").and_then(|v| v.as_str()).map(String::from);
+            let token_usage = transcript_path
+                .as_deref()
+                .and_then(|p| transcript::parse_transcript_usage(std::path::Path::new(p)));
+```
+
+For `Stop`:
+```rust
+            let transcript_path = v.get("transcript_path").and_then(|v| v.as_str()).map(String::from);
+            let token_usage = transcript_path
+                .as_deref()
+                .and_then(|p| transcript::parse_transcript_usage(std::path::Path::new(p)));
+```
+
+- [ ] **Step 6: Verify all tests pass**
+
+Run: `cargo test`
+Expected: all tests pass
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/events/transcript.rs Cargo.toml
+git add src/events/transcript.rs src/events/mod.rs Cargo.toml
 git commit -m "feat: add transcript JSONL parser for token usage"
 ```
 
@@ -1222,7 +1241,7 @@ impl Renderer for TreeViewRenderer {
             let elapsed = format_duration(root.started_at);
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("SESSION {} · {}", &session_label[..8.min(session_label.len())], elapsed),
+                    format!("SESSION {} · {}", session_label.chars().take(8).collect::<String>(), elapsed),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
