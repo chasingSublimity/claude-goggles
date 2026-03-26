@@ -1,4 +1,5 @@
 pub mod tree_view;
+pub mod bloom;
 
 use ratatui::Frame;
 use crate::model::AgentTree;
