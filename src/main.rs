@@ -24,6 +24,9 @@ use render::tree_view::TreeViewRenderer;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+    /// Visualization mode: tree or bloom
+    #[arg(long, default_value = "tree")]
+    viz: String,
 }
 
 #[derive(Subcommand)]
@@ -34,23 +37,34 @@ enum Commands {
     Clean,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum VizMode {
+    Tree,
+    Bloom,
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Commands::Init) => cli::init()?,
         Some(Commands::Clean) => cli::clean()?,
-        None => run_tui()?,
+        None => {
+            let viz = match cli.viz.as_str() {
+                "bloom" => VizMode::Bloom,
+                _ => VizMode::Tree,
+            };
+            run_tui(viz)?;
+        }
     }
     Ok(())
 }
 
-fn run_tui() -> anyhow::Result<()> {
+fn run_tui(initial_mode: VizMode) -> anyhow::Result<()> {
     let sock_path = cli::socket_dir()?.join("goggles.sock");
 
     let rt = tokio::runtime::Runtime::new()?;
     let (tx, mut rx) = mpsc::channel(1000);
 
-    // Start socket listener in background
     let listener = SocketListener::new(sock_path);
     rt.spawn(async move {
         if let Err(e) = listener.listen(tx).await {
@@ -58,58 +72,67 @@ fn run_tui() -> anyhow::Result<()> {
         }
     });
 
-    // Setup terminal
     enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut renderer = TreeViewRenderer;
+    let mut tree_renderer = TreeViewRenderer;
+    let mut bloom_renderer = render::bloom::BloomRenderer::new();
+    let mut viz_mode = initial_mode;
     let mut tree = AgentTree::new();
     let mut scroll_offset: usize = 0;
     let mut selected: usize = 0;
 
     loop {
-        // Drain events from socket
         while let Ok(ev) = rx.try_recv() {
             apply_event(&mut tree, ev);
         }
 
         let visible_count = tree.visible_agent_count();
 
-        // Render
         terminal.draw(|frame| {
-            renderer.render(&tree, frame, scroll_offset, selected);
+            match viz_mode {
+                VizMode::Tree => tree_renderer.render(&tree, frame, scroll_offset, selected),
+                VizMode::Bloom => bloom_renderer.render(&tree, frame, scroll_offset, selected),
+            }
         })?;
 
-        // Handle input (100ms timeout = ~10fps)
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') => break,
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        selected = selected.saturating_sub(1);
-                        // Auto-scroll: each agent takes 2 lines, plus 1 session header line
-                        let selected_line = selected * 2 + 1;
-                        if selected_line < scroll_offset {
-                            scroll_offset = selected_line;
-                        }
+                    KeyCode::Char('v') => {
+                        viz_mode = match viz_mode {
+                            VizMode::Tree => VizMode::Bloom,
+                            VizMode::Bloom => VizMode::Tree,
+                        };
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if visible_count > 0 {
-                            selected = (selected + 1).min(visible_count - 1);
+                    _ if viz_mode == VizMode::Tree => match key.code {
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            selected = selected.saturating_sub(1);
+                            let selected_line = selected * 2 + 1;
+                            if selected_line < scroll_offset {
+                                scroll_offset = selected_line;
+                            }
                         }
-                        let selected_line = selected * 2 + 1;
-                        let area_height = terminal.size()?.height.saturating_sub(2) as usize;
-                        if selected_line + 2 > scroll_offset + area_height {
-                            scroll_offset = (selected_line + 2).saturating_sub(area_height);
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if visible_count > 0 {
+                                selected = (selected + 1).min(visible_count - 1);
+                            }
+                            let selected_line = selected * 2 + 1;
+                            let area_height = terminal.size()?.height.saturating_sub(2) as usize;
+                            if selected_line + 2 > scroll_offset + area_height {
+                                scroll_offset = (selected_line + 2).saturating_sub(area_height);
+                            }
                         }
-                    }
-                    KeyCode::Char('c') => {
-                        if let Some(agent) = tree.nth_visible_agent_mut(selected) {
-                            agent.collapsed = !agent.collapsed;
+                        KeyCode::Char('c') => {
+                            if let Some(agent) = tree.nth_visible_agent_mut(selected) {
+                                agent.collapsed = !agent.collapsed;
+                            }
                         }
+                        _ => {}
                     }
                     _ => {}
                 }
@@ -117,7 +140,6 @@ fn run_tui() -> anyhow::Result<()> {
         }
     }
 
-    // Cleanup
     disable_raw_mode()?;
     std::io::stdout().execute(LeaveAlternateScreen)?;
     Ok(())
