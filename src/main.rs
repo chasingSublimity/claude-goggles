@@ -74,7 +74,10 @@ fn run_tui(initial_mode: VizMode) -> anyhow::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut tree_renderer = TreeViewRenderer;
-    let mut bloom_renderer = render::bloom::BloomRenderer::new();
+    let mut bloom_renderer: Option<render::bloom::BloomRenderer> = match initial_mode {
+        VizMode::Bloom => Some(render::bloom::BloomRenderer::new()),
+        VizMode::Tree => None,
+    };
     let mut viz_mode = initial_mode;
     let mut tree = AgentTree::new();
     let mut scroll_offset: usize = 0;
@@ -85,12 +88,20 @@ fn run_tui(initial_mode: VizMode) -> anyhow::Result<()> {
             apply_event(&mut tree, ev);
         }
 
+        // Clamp selection to valid range after tree changes
         let visible_count = tree.visible_agent_count();
+        if visible_count > 0 {
+            selected = selected.min(visible_count - 1);
+        } else {
+            selected = 0;
+        }
 
         terminal.draw(|frame| {
             match viz_mode {
                 VizMode::Tree => tree_renderer.render(&tree, frame, scroll_offset, selected),
-                VizMode::Bloom => bloom_renderer.render(&tree, frame, scroll_offset, selected),
+                VizMode::Bloom => bloom_renderer
+                    .get_or_insert_with(render::bloom::BloomRenderer::new)
+                    .render(&tree, frame, scroll_offset, selected),
             }
         })?;
 
