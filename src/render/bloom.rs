@@ -149,6 +149,246 @@ fn apply_repulsion(a: &mut Sphere, b: &mut Sphere) {
     }
 }
 
+pub struct BloomRenderer {
+    spheres: Vec<Sphere>,
+    known_agents: HashSet<String>,
+    color_index: usize,
+    pixel_buf: Vec<(f32, f32, f32)>,
+    buf_width: usize,
+    buf_height: usize,
+}
+
+impl BloomRenderer {
+    pub fn new() -> Self {
+        Self {
+            spheres: Vec::new(),
+            known_agents: HashSet::new(),
+            color_index: 0,
+            pixel_buf: Vec::new(),
+            buf_width: 0,
+            buf_height: 0,
+        }
+    }
+
+    fn sync_spheres(&mut self, tree: &AgentTree, center: (f32, f32)) {
+        let agents = match &tree.root {
+            Some(root) => root.all_agents(),
+            None => return,
+        };
+
+        for agent in &agents {
+            if !self.known_agents.contains(&agent.id) {
+                let color = PALETTE[self.color_index % PALETTE.len()];
+                self.color_index += 1;
+                let offset_x = (self.spheres.len() as f32 * 7.0) % 20.0 - 10.0;
+                let offset_y = (self.spheres.len() as f32 * 11.0) % 20.0 - 10.0;
+                let mut sphere = Sphere::new(
+                    agent.id.clone(),
+                    (center.0 + offset_x, center.1 + offset_y),
+                    color,
+                );
+                sphere.velocity = (offset_x * 0.1, offset_y * 0.1);
+                self.spheres.push(sphere);
+                self.known_agents.insert(agent.id.clone());
+            }
+        }
+
+        // Update existing spheres
+        for sphere in &mut self.spheres {
+            if let Some(agent) = agents.iter().find(|a| a.id == sphere.agent_id) {
+                let total_tokens = agent.token_usage.as_ref().map_or(0, |t| t.input + t.output);
+                sphere.base_radius = radius_from_tokens(total_tokens);
+
+                let new_status = match &agent.status {
+                    AgentStatus::Running { .. } => SphereStatus::Running,
+                    AgentStatus::Idle => SphereStatus::Idle,
+                    AgentStatus::Completed => SphereStatus::Completed,
+                };
+
+                if new_status == SphereStatus::Completed && sphere.status != SphereStatus::Completed {
+                    sphere.fade_start = Some(Instant::now());
+                }
+                sphere.status = new_status;
+            }
+        }
+    }
+
+    fn simulate(&mut self, center: (f32, f32)) {
+        // Gravity
+        for sphere in &mut self.spheres {
+            apply_gravity(sphere, center);
+        }
+
+        // Pairwise repulsion
+        let len = self.spheres.len();
+        for i in 0..len {
+            for j in (i + 1)..len {
+                let (left, right) = self.spheres.split_at_mut(j);
+                apply_repulsion(&mut left[i], &mut right[0]);
+            }
+        }
+
+        // Damping + pulse advance
+        for sphere in &mut self.spheres {
+            sphere.velocity.0 *= 0.9;
+            sphere.velocity.1 *= 0.9;
+            sphere.position.0 += sphere.velocity.0;
+            sphere.position.1 += sphere.velocity.1;
+
+            let (_, phase_speed) = sphere.pulse_params();
+            sphere.pulse_phase = (sphere.pulse_phase + phase_speed) % std::f32::consts::TAU;
+        }
+    }
+
+    fn rasterize_and_composite(&mut self) {
+        // Clear buffer
+        for pixel in &mut self.pixel_buf {
+            *pixel = (0.0, 0.0, 0.0);
+        }
+
+        for sphere in &self.spheres {
+            let radius = sphere.effective_radius();
+            let spread = sphere.bloom_spread();
+            let mult = sphere.color_multiplier();
+            let (cr, cg, cb) = sphere.color;
+            let color = (cr as f32 * mult, cg as f32 * mult, cb as f32 * mult);
+
+            let r_ceil = (radius * 2.0).ceil() as i32;
+            let cx = sphere.position.0 as i32;
+            let cy = sphere.position.1 as i32;
+
+            for dy in -r_ceil..=r_ceil {
+                for dx in -r_ceil..=r_ceil {
+                    let px = cx + dx;
+                    let py = cy + dy;
+                    if px < 0 || py < 0 || px >= self.buf_width as i32 || py >= self.buf_height as i32 {
+                        continue;
+                    }
+                    let dist_sq = (dx * dx + dy * dy) as f32;
+                    let intensity = bloom_falloff(dist_sq, radius, spread);
+                    if intensity < INTENSITY_THRESHOLD {
+                        continue;
+                    }
+                    let idx = py as usize * self.buf_width + px as usize;
+                    let contribution = (color.0 * intensity, color.1 * intensity, color.2 * intensity);
+                    self.pixel_buf[idx] = additive_blend(self.pixel_buf[idx], contribution);
+                }
+            }
+        }
+    }
+
+    fn encode_to_frame(&self, frame: &mut Frame, area: Rect) {
+        let mut lines: Vec<Line> = Vec::new();
+        let term_w = area.width as usize;
+        let term_h = area.height as usize;
+
+        for row in 0..term_h {
+            let mut spans: Vec<Span> = Vec::new();
+            for col in 0..term_w {
+                let mut dots = [false; 8];
+                let mut max_intensity: f32 = 0.0;
+                let mut max_color = (0.0_f32, 0.0_f32, 0.0_f32);
+
+                for dy in 0..4 {
+                    for dx in 0..2 {
+                        let px = col * 2 + dx;
+                        let py = row * 4 + dy;
+                        if px < self.buf_width && py < self.buf_height {
+                            let idx = py * self.buf_width + px;
+                            let (r, g, b) = self.pixel_buf[idx];
+                            let intensity = r + g + b;
+                            if intensity > INTENSITY_THRESHOLD * 255.0 {
+                                let dot_idx = dx * 4 + dy;
+                                dots[dot_idx] = true;
+                                if intensity > max_intensity {
+                                    max_intensity = intensity;
+                                    max_color = (r, g, b);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let ch = braille_char(dots);
+                let fg = Color::Rgb(
+                    max_color.0.min(255.0) as u8,
+                    max_color.1.min(255.0) as u8,
+                    max_color.2.min(255.0) as u8,
+                );
+                spans.push(Span::styled(ch.to_string(), Style::default().fg(fg)));
+            }
+            lines.push(Line::from(spans));
+        }
+
+        let widget = ratatui::widgets::Paragraph::new(lines);
+        frame.render_widget(widget, area);
+    }
+}
+
+impl Renderer for BloomRenderer {
+    fn render(&mut self, tree: &AgentTree, frame: &mut Frame, _scroll_offset: usize, _selected: usize) {
+        let area = frame.area();
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(area);
+
+        let canvas = chunks[0];
+        let new_w = canvas.width as usize * 2;
+        let new_h = canvas.height as usize * 4;
+        if new_w != self.buf_width || new_h != self.buf_height {
+            self.buf_width = new_w;
+            self.buf_height = new_h;
+            self.pixel_buf = vec![(0.0, 0.0, 0.0); new_w * new_h];
+        }
+
+        let center = (new_w as f32 / 2.0, new_h as f32 / 2.0);
+        self.sync_spheres(tree, center);
+        self.simulate(center);
+        self.rasterize_and_composite();
+        self.encode_to_frame(frame, canvas);
+
+        // Footer
+        let (active, total, total_tokens) = count_and_tokens(tree);
+        let token_str = if total_tokens >= 1000 {
+            format!("{:.1}k tok", total_tokens as f64 / 1000.0)
+        } else {
+            format!("{} tok", total_tokens)
+        };
+        let footer = Line::from(vec![
+            Span::styled(
+                format!("agents: {} ({} active)", total, active),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(token_str, Style::default().fg(Color::DarkGray)),
+            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("dropped: {}", tree.dropped_events),
+                Style::default().fg(if tree.dropped_events > 0 { Color::Yellow } else { Color::DarkGray }),
+            ),
+            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("q: quit  v: tree view", Style::default().fg(Color::DarkGray)),
+        ]);
+        frame.render_widget(ratatui::widgets::Paragraph::new(footer), chunks[1]);
+    }
+}
+
+fn count_and_tokens(tree: &AgentTree) -> (usize, usize, u64) {
+    match &tree.root {
+        None => (0, 0, 0),
+        Some(root) => {
+            let agents = root.all_agents();
+            let total = agents.len();
+            let active = agents.iter().filter(|a| !matches!(a.status, AgentStatus::Completed)).count();
+            let tokens: u64 = agents.iter().map(|a| {
+                a.token_usage.as_ref().map_or(0, |t| t.input + t.output)
+            }).sum();
+            (active, total, tokens)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +508,41 @@ mod tests {
         }
         let final_dist = (a.position.0 - b.position.0).abs();
         assert!(final_dist > initial_dist, "spheres should separate: {} > {}", final_dist, initial_dist);
+    }
+
+    #[test]
+    fn test_sphere_sync_adds_new_agents() {
+        use crate::model::Agent;
+        let mut renderer = BloomRenderer::new();
+        let mut tree = AgentTree::new();
+        let mut root = Agent::new("root".into(), "Main".into());
+        root.children.push(Agent::new("c1".into(), "Task 1".into()));
+        tree.root = Some(root);
+
+        renderer.sync_spheres(&tree, (100.0, 100.0));
+
+        assert_eq!(renderer.spheres.len(), 2);
+        assert!(renderer.known_agents.contains("root"));
+        assert!(renderer.known_agents.contains("c1"));
+        assert_eq!(renderer.spheres[0].color, PALETTE[0]);
+        assert_eq!(renderer.spheres[1].color, PALETTE[1]);
+    }
+
+    #[test]
+    fn test_sphere_sync_updates_status() {
+        use crate::model::{Agent, AgentStatus};
+        let mut renderer = BloomRenderer::new();
+        let mut tree = AgentTree::new();
+        tree.root = Some(Agent::new("root".into(), "Main".into()));
+
+        renderer.sync_spheres(&tree, (50.0, 50.0));
+        assert_eq!(renderer.spheres[0].status, SphereStatus::Idle);
+
+        tree.root.as_mut().unwrap().status = AgentStatus::Running {
+            tool_name: "Read".into(),
+            key_arg: "file.rs".into(),
+        };
+        renderer.sync_spheres(&tree, (50.0, 50.0));
+        assert_eq!(renderer.spheres[0].status, SphereStatus::Running);
     }
 }
