@@ -489,7 +489,14 @@ impl Renderer for BloomRenderer {
 
         // Footer
         let token_str = super::footer::format_tokens(total_tokens);
+        let param_display = format!(
+            "{}: {:.3}",
+            self.params.param_name(),
+            self.params.param_value()
+        );
         let footer = Line::from(vec![
+            Span::styled(param_display, Style::default().fg(Color::Cyan)),
+            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("agents: {} ({} active)", total, active),
                 Style::default().fg(Color::DarkGray),
@@ -498,11 +505,9 @@ impl Renderer for BloomRenderer {
             Span::styled(token_str, Style::default().fg(Color::DarkGray)),
             Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("dropped: {}", tree.dropped_events),
-                Style::default().fg(if tree.dropped_events > 0 { Color::Yellow } else { Color::DarkGray }),
+                "[/] select  +/- adjust  r reset  v tree",
+                Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-            Span::styled("q: quit  v: tree view", Style::default().fg(Color::DarkGray)),
         ]);
         frame.render_widget(ratatui::widgets::Paragraph::new(footer), chunks[1]);
     }
