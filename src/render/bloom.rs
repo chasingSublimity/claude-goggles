@@ -377,11 +377,7 @@ impl Renderer for BloomRenderer {
         self.encode_to_frame(frame, canvas);
 
         // Footer
-        let token_str = if total_tokens >= 1000 {
-            format!("{:.1}k tok", total_tokens as f64 / 1000.0)
-        } else {
-            format!("{} tok", total_tokens)
-        };
+        let token_str = super::footer::format_tokens(total_tokens);
         let footer = Line::from(vec![
             Span::styled(
                 format!("agents: {} ({} active)", total, active),
