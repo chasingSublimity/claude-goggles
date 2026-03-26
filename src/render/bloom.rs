@@ -166,9 +166,9 @@ fn additive_blend(a: (f32, f32, f32), b: (f32, f32, f32)) -> (f32, f32, f32) {
     )
 }
 
-fn radius_from_tokens(total_tokens: u64) -> f32 {
-    let raw = (total_tokens as f32 / 500.0).sqrt() * 4.0;
-    raw.clamp(6.0, 25.0)
+fn radius_from_tokens(total_tokens: u64, params: &BloomParams) -> f32 {
+    let raw = (total_tokens as f32 / 500.0).sqrt() * 6.0;
+    raw.clamp(params.radius_min, params.radius_max)
 }
 
 // --- Sphere physics ---
@@ -198,7 +198,7 @@ impl Sphere {
             agent_id,
             position,
             velocity: (0.0, 0.0),
-            base_radius: 6.0,
+            base_radius: 12.0,
             pulse_phase: 0.0,
             color,
             status: SphereStatus::Idle,
@@ -206,24 +206,24 @@ impl Sphere {
         }
     }
 
-    fn effective_radius(&self) -> f32 {
-        let (amplitude, _) = self.pulse_params();
+    fn effective_radius(&self, params: &BloomParams) -> f32 {
+        let (amplitude, _) = self.pulse_params(params);
         self.base_radius + amplitude * self.pulse_phase.sin()
     }
 
-    fn pulse_params(&self) -> (f32, f32) {
+    fn pulse_params(&self, params: &BloomParams) -> (f32, f32) {
         match self.status {
-            SphereStatus::Running => (3.0, 0.15),
-            SphereStatus::Idle => (1.0, 0.05),
+            SphereStatus::Running => (params.pulse_amp_running, 0.15),
+            SphereStatus::Idle => (params.pulse_amp_idle, 0.05),
             SphereStatus::Completed => (0.0, 0.0),
         }
     }
 
-    fn bloom_spread(&self) -> f32 {
+    fn bloom_spread(&self, params: &BloomParams) -> f32 {
         match self.status {
-            SphereStatus::Running => 0.8,
-            SphereStatus::Idle => 0.5,
-            SphereStatus::Completed => 0.3,
+            SphereStatus::Running => params.bloom_spread_running,
+            SphereStatus::Idle => params.bloom_spread_idle,
+            SphereStatus::Completed => params.bloom_spread_completed(),
         }
     }
 
@@ -242,19 +242,18 @@ impl Sphere {
     }
 }
 
-fn apply_gravity(sphere: &mut Sphere, center: (f32, f32)) {
+fn apply_gravity(sphere: &mut Sphere, center: (f32, f32), gravity: f32) {
     let dx = center.0 - sphere.position.0;
     let dy = center.1 - sphere.position.1;
-    sphere.velocity.0 += dx * 0.02;
-    sphere.velocity.1 += dy * 0.02;
+    sphere.velocity.0 += dx * gravity;
+    sphere.velocity.1 += dy * gravity;
 }
 
-fn apply_repulsion(a: &mut Sphere, b: &mut Sphere) {
+fn apply_repulsion(a: &mut Sphere, b: &mut Sphere, params: &BloomParams) {
     let dx = b.position.0 - a.position.0;
     let dy = b.position.1 - a.position.1;
     let dist_sq = dx * dx + dy * dy;
-    // Extra padding keeps spheres visually separated
-    let min_dist = a.effective_radius() + b.effective_radius() + 6.0;
+    let min_dist = a.effective_radius(params) + b.effective_radius(params) + params.repulsion_padding;
     let min_dist_sq = min_dist * min_dist;
 
     if dist_sq < min_dist_sq && dist_sq > 0.001 {
@@ -277,6 +276,7 @@ pub struct BloomRenderer {
     pixel_buf: Vec<(f32, f32, f32)>,
     buf_width: usize,
     buf_height: usize,
+    pub params: BloomParams,
 }
 
 impl Default for BloomRenderer {
@@ -294,6 +294,7 @@ impl BloomRenderer {
             pixel_buf: Vec::new(),
             buf_width: 0,
             buf_height: 0,
+            params: BloomParams::default(),
         }
     }
 
@@ -319,7 +320,7 @@ impl BloomRenderer {
         for sphere in &mut self.spheres {
             if let Some(agent) = agents.get(sphere.agent_id.as_str()) {
                 let total_tokens = agent.token_usage.as_ref().map_or(0, |t| t.input + t.output);
-                sphere.base_radius = radius_from_tokens(total_tokens);
+                sphere.base_radius = radius_from_tokens(total_tokens, &self.params);
 
                 let new_status = match &agent.status {
                     AgentStatus::Running { .. } => SphereStatus::Running,
@@ -339,39 +340,37 @@ impl BloomRenderer {
     }
 
     fn simulate(&mut self, center: (f32, f32)) {
-        // Gravity
+        let gravity = self.params.gravity;
         for sphere in &mut self.spheres {
-            apply_gravity(sphere, center);
+            apply_gravity(sphere, center, gravity);
         }
 
-        // Pairwise repulsion
         let len = self.spheres.len();
         for i in 0..len {
             for j in (i + 1)..len {
                 let (left, right) = self.spheres.split_at_mut(j);
-                apply_repulsion(&mut left[i], &mut right[0]);
+                apply_repulsion(&mut left[i], &mut right[0], &self.params);
             }
         }
 
-        // Damping + pulse advance
         for sphere in &mut self.spheres {
             sphere.velocity.0 *= 0.9;
             sphere.velocity.1 *= 0.9;
             sphere.position.0 += sphere.velocity.0;
             sphere.position.1 += sphere.velocity.1;
 
-            let (_, phase_speed) = sphere.pulse_params();
+            let (_, phase_speed) = sphere.pulse_params(&self.params);
             sphere.pulse_phase = (sphere.pulse_phase + phase_speed) % std::f32::consts::TAU;
         }
     }
 
     fn rasterize_and_composite(&mut self) {
-        // Clear buffer
         self.pixel_buf.fill((0.0, 0.0, 0.0));
+        let params = self.params.clone();
 
         for sphere in &self.spheres {
-            let radius = sphere.effective_radius();
-            let spread = sphere.bloom_spread();
+            let radius = sphere.effective_radius(&params);
+            let spread = sphere.bloom_spread(&params);
             let mult = sphere.color_multiplier();
             let (cr, cg, cb) = sphere.color;
             let color = (f32::from(cr) * mult, f32::from(cg) * mult, f32::from(cb) * mult);
@@ -574,21 +573,24 @@ mod tests {
 
     #[test]
     fn test_radius_from_tokens_zero() {
-        assert_eq!(radius_from_tokens(0), 6.0); // min clamp
+        let p = BloomParams::default();
+        assert_eq!(radius_from_tokens(0, &p), 12.0); // min clamp
     }
 
     #[test]
     fn test_radius_from_tokens_large() {
-        let r = radius_from_tokens(100_000);
-        assert!(r <= 25.0, "should clamp to max 25, got {}", r);
-        assert!(r >= 24.0, "100k tokens should be near max, got {}", r);
+        let p = BloomParams::default();
+        let r = radius_from_tokens(100_000, &p);
+        assert!(r <= 45.0, "should clamp to max 45, got {}", r);
+        assert!(r >= 44.0, "100k tokens should be near max, got {}", r);
     }
 
     #[test]
     fn test_radius_from_tokens_mid() {
-        let r = radius_from_tokens(10_000);
-        assert!(r > 6.0, "10k tokens should be above min, got {}", r);
-        assert!(r < 25.0, "10k tokens should be below max, got {}", r);
+        let p = BloomParams::default();
+        let r = radius_from_tokens(10_000, &p);
+        assert!(r > 12.0, "10k tokens should be above min, got {}", r);
+        assert!(r < 45.0, "10k tokens should be below max, got {}", r);
     }
 
     #[test]
@@ -596,7 +598,7 @@ mod tests {
         let center = (50.0, 50.0);
         let mut sphere = Sphere::new("a".into(), (100.0, 50.0), (0, 210, 255));
         for _ in 0..20 {
-            apply_gravity(&mut sphere, center);
+            apply_gravity(&mut sphere, center, 0.02);
             sphere.position.0 += sphere.velocity.0;
             sphere.position.1 += sphere.velocity.1;
             sphere.velocity.0 *= 0.9;
@@ -610,6 +612,7 @@ mod tests {
 
     #[test]
     fn test_repulsion_separates_spheres() {
+        let params = BloomParams::default();
         let mut a = Sphere::new("a".into(), (50.0, 50.0), (255, 0, 0));
         a.base_radius = 10.0;
         let mut b = Sphere::new("b".into(), (52.0, 50.0), (0, 0, 255));
@@ -617,7 +620,7 @@ mod tests {
         let initial_dist = (a.position.0 - b.position.0).abs();
 
         for _ in 0..20 {
-            apply_repulsion(&mut a, &mut b);
+            apply_repulsion(&mut a, &mut b, &params);
             a.position.0 += a.velocity.0;
             a.position.1 += a.velocity.1;
             b.position.0 += b.velocity.0;
@@ -684,7 +687,7 @@ mod tests {
         assert_eq!(s.agent_id, "test");
         assert_eq!(s.position, (10.0, 20.0));
         assert_eq!(s.velocity, (0.0, 0.0));
-        assert_eq!(s.base_radius, 6.0);
+        assert_eq!(s.base_radius, 12.0);
         assert_eq!(s.pulse_phase, 0.0);
         assert_eq!(s.color, (255, 0, 0));
         assert_eq!(s.status, SphereStatus::Idle);
@@ -693,46 +696,50 @@ mod tests {
 
     #[test]
     fn test_effective_radius_at_zero_phase() {
+        let params = BloomParams::default();
         let s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
-        // Idle: amplitude=1.0, sin(0)=0 → base_radius + 0 = 6.0
-        assert_eq!(s.effective_radius(), 6.0);
+        // Idle: amplitude=2.0, sin(0)=0 → base_radius + 0 = 12.0
+        assert_eq!(s.effective_radius(&params), 12.0);
     }
 
     #[test]
     fn test_effective_radius_running_at_peak() {
+        let params = BloomParams::default();
         let mut s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
         s.status = SphereStatus::Running;
         s.pulse_phase = std::f32::consts::FRAC_PI_2; // sin(π/2) = 1.0
-        // Running: amplitude=3.0, base=6.0 → 6.0 + 3.0 = 9.0
-        assert!((s.effective_radius() - 9.0).abs() < 0.01);
+        // Running: amplitude=5.0, base=12.0 → 12.0 + 5.0 = 17.0
+        assert!((s.effective_radius(&params) - 17.0).abs() < 0.01);
     }
 
     #[test]
     fn test_pulse_params_by_status() {
+        let params = BloomParams::default();
         let mut s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
 
         s.status = SphereStatus::Running;
-        assert_eq!(s.pulse_params(), (3.0, 0.15));
+        assert_eq!(s.pulse_params(&params), (5.0, 0.15));
 
         s.status = SphereStatus::Idle;
-        assert_eq!(s.pulse_params(), (1.0, 0.05));
+        assert_eq!(s.pulse_params(&params), (2.0, 0.05));
 
         s.status = SphereStatus::Completed;
-        assert_eq!(s.pulse_params(), (0.0, 0.0));
+        assert_eq!(s.pulse_params(&params), (0.0, 0.0));
     }
 
     #[test]
     fn test_bloom_spread_by_status() {
+        let params = BloomParams::default();
         let mut s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
 
         s.status = SphereStatus::Running;
-        assert_eq!(s.bloom_spread(), 0.8);
+        assert_eq!(s.bloom_spread(&params), 1.2);
 
         s.status = SphereStatus::Idle;
-        assert_eq!(s.bloom_spread(), 0.5);
+        assert_eq!(s.bloom_spread(&params), 0.8);
 
         s.status = SphereStatus::Completed;
-        assert_eq!(s.bloom_spread(), 0.3);
+        assert_eq!(s.bloom_spread(&params), 0.5);
     }
 
     #[test]
@@ -823,7 +830,7 @@ mod tests {
             let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
             renderer.sync_spheres(&agents, (50.0, 50.0));
         }
-        assert_eq!(renderer.spheres[0].base_radius, 6.0); // no tokens = min
+        assert_eq!(renderer.spheres[0].base_radius, 12.0); // no tokens = min
 
         root.token_usage = Some(TokenUsage { input: 5000, output: 5000 });
         {
@@ -831,32 +838,34 @@ mod tests {
             let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
             renderer.sync_spheres(&agents, (50.0, 50.0));
         }
-        assert!(renderer.spheres[0].base_radius > 6.0, "should grow with tokens");
+        assert!(renderer.spheres[0].base_radius > 12.0, "should grow with tokens");
     }
 
     // --- Physics edge cases ---
 
     #[test]
     fn test_repulsion_no_effect_when_far_apart() {
+        let params = BloomParams::default();
         let mut a = Sphere::new("a".into(), (0.0, 0.0), (255, 0, 0));
         a.base_radius = 5.0;
         let mut b = Sphere::new("b".into(), (100.0, 0.0), (0, 0, 255));
         b.base_radius = 5.0;
 
-        apply_repulsion(&mut a, &mut b);
+        apply_repulsion(&mut a, &mut b, &params);
         assert_eq!(a.velocity, (0.0, 0.0));
         assert_eq!(b.velocity, (0.0, 0.0));
     }
 
     #[test]
     fn test_repulsion_zero_distance_no_panic() {
+        let params = BloomParams::default();
         let mut a = Sphere::new("a".into(), (50.0, 50.0), (255, 0, 0));
         a.base_radius = 10.0;
         let mut b = Sphere::new("b".into(), (50.0, 50.0), (0, 0, 255));
         b.base_radius = 10.0;
 
         // Should not panic or produce NaN — guarded by dist_sq > 0.001
-        apply_repulsion(&mut a, &mut b);
+        apply_repulsion(&mut a, &mut b, &params);
         assert!(!a.velocity.0.is_nan());
         assert!(!b.velocity.0.is_nan());
     }
