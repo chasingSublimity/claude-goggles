@@ -552,4 +552,193 @@ mod tests {
         renderer.sync_spheres(&tree, (50.0, 50.0));
         assert_eq!(renderer.spheres[0].status, SphereStatus::Running);
     }
+
+    // --- Sphere method tests ---
+
+    #[test]
+    fn test_sphere_new_defaults() {
+        let s = Sphere::new("test".into(), (10.0, 20.0), (255, 0, 0));
+        assert_eq!(s.agent_id, "test");
+        assert_eq!(s.position, (10.0, 20.0));
+        assert_eq!(s.velocity, (0.0, 0.0));
+        assert_eq!(s.base_radius, 3.0);
+        assert_eq!(s.pulse_phase, 0.0);
+        assert_eq!(s.color, (255, 0, 0));
+        assert_eq!(s.status, SphereStatus::Idle);
+        assert!(s.fade_start.is_none());
+    }
+
+    #[test]
+    fn test_effective_radius_at_zero_phase() {
+        let s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
+        // Idle: amplitude=1.0, sin(0)=0 → base_radius + 0 = 3.0
+        assert_eq!(s.effective_radius(), 3.0);
+    }
+
+    #[test]
+    fn test_effective_radius_running_at_peak() {
+        let mut s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
+        s.status = SphereStatus::Running;
+        s.pulse_phase = std::f32::consts::FRAC_PI_2; // sin(π/2) = 1.0
+        // Running: amplitude=3.0, base=3.0 → 3.0 + 3.0 = 6.0
+        assert!((s.effective_radius() - 6.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_pulse_params_by_status() {
+        let mut s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
+
+        s.status = SphereStatus::Running;
+        assert_eq!(s.pulse_params(), (3.0, 0.15));
+
+        s.status = SphereStatus::Idle;
+        assert_eq!(s.pulse_params(), (1.0, 0.05));
+
+        s.status = SphereStatus::Completed;
+        assert_eq!(s.pulse_params(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn test_bloom_spread_by_status() {
+        let mut s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
+
+        s.status = SphereStatus::Running;
+        assert_eq!(s.bloom_spread(), 0.8);
+
+        s.status = SphereStatus::Idle;
+        assert_eq!(s.bloom_spread(), 0.5);
+
+        s.status = SphereStatus::Completed;
+        assert_eq!(s.bloom_spread(), 0.3);
+    }
+
+    #[test]
+    fn test_color_multiplier_no_fade() {
+        let s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
+        assert_eq!(s.color_multiplier(), 1.0);
+    }
+
+    #[test]
+    fn test_color_multiplier_with_fade() {
+        let mut s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
+        s.fade_start = Some(std::time::Instant::now());
+        // Just started fading — should be close to 1.0
+        let mult = s.color_multiplier();
+        assert!(mult > 0.9, "just-started fade should be near 1.0, got {}", mult);
+        assert!(mult <= 1.0);
+    }
+
+    // --- sync_spheres edge cases ---
+
+    #[test]
+    fn test_sphere_sync_empty_tree() {
+        let mut renderer = BloomRenderer::new();
+        let tree = AgentTree::new(); // no root
+        renderer.sync_spheres(&tree, (50.0, 50.0));
+        assert_eq!(renderer.spheres.len(), 0);
+        assert!(renderer.known_agents.is_empty());
+    }
+
+    #[test]
+    fn test_sphere_sync_idempotent() {
+        use crate::model::Agent;
+        let mut renderer = BloomRenderer::new();
+        let mut tree = AgentTree::new();
+        tree.root = Some(Agent::new("root".into(), "Main".into()));
+
+        renderer.sync_spheres(&tree, (50.0, 50.0));
+        assert_eq!(renderer.spheres.len(), 1);
+
+        // Second sync with same tree should not add duplicates
+        renderer.sync_spheres(&tree, (50.0, 50.0));
+        assert_eq!(renderer.spheres.len(), 1);
+    }
+
+    #[test]
+    fn test_sphere_sync_sets_fade_on_completion() {
+        use crate::model::{Agent, AgentStatus};
+        let mut renderer = BloomRenderer::new();
+        let mut tree = AgentTree::new();
+        tree.root = Some(Agent::new("root".into(), "Main".into()));
+
+        renderer.sync_spheres(&tree, (50.0, 50.0));
+        assert!(renderer.spheres[0].fade_start.is_none());
+
+        tree.root.as_mut().unwrap().status = AgentStatus::Completed;
+        renderer.sync_spheres(&tree, (50.0, 50.0));
+        assert!(renderer.spheres[0].fade_start.is_some());
+        assert_eq!(renderer.spheres[0].status, SphereStatus::Completed);
+    }
+
+    #[test]
+    fn test_sphere_sync_updates_radius_from_tokens() {
+        use crate::model::{Agent, TokenUsage};
+        let mut renderer = BloomRenderer::new();
+        let mut tree = AgentTree::new();
+        tree.root = Some(Agent::new("root".into(), "Main".into()));
+
+        renderer.sync_spheres(&tree, (50.0, 50.0));
+        assert_eq!(renderer.spheres[0].base_radius, 3.0); // no tokens = min
+
+        tree.root.as_mut().unwrap().token_usage = Some(TokenUsage { input: 5000, output: 5000 });
+        renderer.sync_spheres(&tree, (50.0, 50.0));
+        assert!(renderer.spheres[0].base_radius > 3.0, "should grow with tokens");
+    }
+
+    // --- Physics edge cases ---
+
+    #[test]
+    fn test_repulsion_no_effect_when_far_apart() {
+        let mut a = Sphere::new("a".into(), (0.0, 0.0), (255, 0, 0));
+        a.base_radius = 5.0;
+        let mut b = Sphere::new("b".into(), (100.0, 0.0), (0, 0, 255));
+        b.base_radius = 5.0;
+
+        apply_repulsion(&mut a, &mut b);
+        assert_eq!(a.velocity, (0.0, 0.0));
+        assert_eq!(b.velocity, (0.0, 0.0));
+    }
+
+    #[test]
+    fn test_repulsion_zero_distance_no_panic() {
+        let mut a = Sphere::new("a".into(), (50.0, 50.0), (255, 0, 0));
+        a.base_radius = 10.0;
+        let mut b = Sphere::new("b".into(), (50.0, 50.0), (0, 0, 255));
+        b.base_radius = 10.0;
+
+        // Should not panic or produce NaN — guarded by dist_sq > 0.001
+        apply_repulsion(&mut a, &mut b);
+        assert!(!a.velocity.0.is_nan());
+        assert!(!b.velocity.0.is_nan());
+    }
+
+    // --- count_and_tokens helper ---
+
+    #[test]
+    fn test_count_and_tokens_empty_tree() {
+        let tree = AgentTree::new();
+        assert_eq!(count_and_tokens(&tree), (0, 0, 0));
+    }
+
+    #[test]
+    fn test_count_and_tokens_mixed_status() {
+        use crate::model::{Agent, AgentStatus, TokenUsage};
+        let mut tree = AgentTree::new();
+        let mut root = Agent::new("root".into(), "Main".into());
+        root.token_usage = Some(TokenUsage { input: 100, output: 200 });
+
+        let mut child = Agent::new("c1".into(), "Task".into());
+        child.status = AgentStatus::Completed;
+        child.token_usage = Some(TokenUsage { input: 300, output: 400 });
+        root.children.push(child);
+
+        // Child with no tokens
+        root.children.push(Agent::new("c2".into(), "Task 2".into()));
+
+        tree.root = Some(root);
+        let (active, total, tokens) = count_and_tokens(&tree);
+        assert_eq!(total, 3);
+        assert_eq!(active, 2); // root + c2 active, c1 completed
+        assert_eq!(tokens, 1000); // 100+200 + 300+400 + 0
+    }
 }
