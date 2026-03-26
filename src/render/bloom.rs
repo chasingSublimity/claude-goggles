@@ -40,6 +40,7 @@ fn braille_char(dots: [bool; 8]) -> char {
 // --- Color math ---
 
 fn bloom_falloff(distance_sq: f32, radius: f32, bloom_spread: f32) -> f32 {
+    debug_assert!(radius > 0.0 && bloom_spread > 0.0, "radius and bloom_spread must be positive");
     (-distance_sq / (radius * radius * bloom_spread)).exp()
 }
 
@@ -158,6 +159,12 @@ pub struct BloomRenderer {
     buf_height: usize,
 }
 
+impl Default for BloomRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BloomRenderer {
     pub fn new() -> Self {
         Self {
@@ -188,8 +195,8 @@ impl BloomRenderer {
                     color,
                 );
                 sphere.velocity = (offset_x * 0.1, offset_y * 0.1);
+                self.known_agents.insert(sphere.agent_id.clone());
                 self.spheres.push(sphere);
-                self.known_agents.insert(agent.id.clone());
             }
         }
 
@@ -242,9 +249,7 @@ impl BloomRenderer {
 
     fn rasterize_and_composite(&mut self) {
         // Clear buffer
-        for pixel in &mut self.pixel_buf {
-            *pixel = (0.0, 0.0, 0.0);
-        }
+        self.pixel_buf.fill((0.0, 0.0, 0.0));
 
         for sphere in &self.spheres {
             let radius = sphere.effective_radius();
@@ -254,17 +259,19 @@ impl BloomRenderer {
             let color = (cr as f32 * mult, cg as f32 * mult, cb as f32 * mult);
 
             let r_ceil = (radius * 2.0).ceil() as i32;
-            let cx = sphere.position.0 as i32;
-            let cy = sphere.position.1 as i32;
+            let cx = sphere.position.0;
+            let cy = sphere.position.1;
+            let cx_i = cx as i32;
+            let cy_i = cy as i32;
 
             for dy in -r_ceil..=r_ceil {
                 for dx in -r_ceil..=r_ceil {
-                    let px = cx + dx;
-                    let py = cy + dy;
+                    let px = cx_i + dx;
+                    let py = cy_i + dy;
                     if px < 0 || py < 0 || px >= self.buf_width as i32 || py >= self.buf_height as i32 {
                         continue;
                     }
-                    let dist_sq = (dx * dx + dy * dy) as f32;
+                    let dist_sq = (px as f32 - cx).powi(2) + (py as f32 - cy).powi(2);
                     let intensity = bloom_falloff(dist_sq, radius, spread);
                     if intensity < INTENSITY_THRESHOLD {
                         continue;

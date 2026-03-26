@@ -25,8 +25,8 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
     /// Visualization mode: tree or bloom
-    #[arg(long, default_value = "tree")]
-    viz: String,
+    #[arg(long, default_value = "tree", value_enum)]
+    viz: VizMode,
 }
 
 #[derive(Subcommand)]
@@ -37,7 +37,7 @@ enum Commands {
     Clean,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, clap::ValueEnum)]
 enum VizMode {
     Tree,
     Bloom,
@@ -49,11 +49,7 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Init) => cli::init()?,
         Some(Commands::Clean) => cli::clean()?,
         None => {
-            let viz = match cli.viz.as_str() {
-                "bloom" => VizMode::Bloom,
-                _ => VizMode::Tree,
-            };
-            run_tui(viz)?;
+            run_tui(cli.viz)?;
         }
     }
     Ok(())
