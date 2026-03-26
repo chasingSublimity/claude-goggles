@@ -54,7 +54,7 @@ fn additive_blend(a: (f32, f32, f32), b: (f32, f32, f32)) -> (f32, f32, f32) {
 
 fn radius_from_tokens(total_tokens: u64) -> f32 {
     let raw = (total_tokens as f32 / 500.0).sqrt() * 4.0;
-    raw.clamp(3.0, 20.0)
+    raw.clamp(6.0, 25.0)
 }
 
 // --- Sphere physics ---
@@ -83,7 +83,7 @@ impl Sphere {
             agent_id,
             position,
             velocity: (0.0, 0.0),
-            base_radius: 3.0,
+            base_radius: 6.0,
             pulse_phase: 0.0,
             color,
             status: SphereStatus::Idle,
@@ -116,10 +116,14 @@ impl Sphere {
         match self.fade_start {
             Some(t) => {
                 let elapsed = t.elapsed().as_secs_f32();
-                (1.0 - elapsed / 3.0).max(0.2)
+                (1.0 - elapsed / 3.0).max(0.0)
             }
             None => 1.0,
         }
+    }
+
+    fn is_faded_out(&self) -> bool {
+        matches!(self.fade_start, Some(t) if t.elapsed().as_secs_f32() >= 3.0)
     }
 }
 
@@ -134,7 +138,8 @@ fn apply_repulsion(a: &mut Sphere, b: &mut Sphere) {
     let dx = b.position.0 - a.position.0;
     let dy = b.position.1 - a.position.1;
     let dist_sq = dx * dx + dy * dy;
-    let min_dist = a.effective_radius() + b.effective_radius();
+    // Extra padding keeps spheres visually separated
+    let min_dist = a.effective_radius() + b.effective_radius() + 6.0;
     let min_dist_sq = min_dist * min_dist;
 
     if dist_sq < min_dist_sq && dist_sq > 0.001 {
@@ -218,6 +223,9 @@ impl BloomRenderer {
                 sphere.status = new_status;
             }
         }
+
+        // Remove fully faded-out spheres
+        self.spheres.retain(|s| !s.is_faded_out());
     }
 
     fn simulate(&mut self, center: (f32, f32)) {
@@ -460,21 +468,21 @@ mod tests {
 
     #[test]
     fn test_radius_from_tokens_zero() {
-        assert_eq!(radius_from_tokens(0), 3.0);
+        assert_eq!(radius_from_tokens(0), 6.0); // min clamp
     }
 
     #[test]
     fn test_radius_from_tokens_large() {
         let r = radius_from_tokens(100_000);
-        assert!(r <= 20.0, "should clamp to max 20, got {}", r);
-        assert!(r >= 19.0, "100k tokens should be near max, got {}", r);
+        assert!(r <= 25.0, "should clamp to max 25, got {}", r);
+        assert!(r >= 24.0, "100k tokens should be near max, got {}", r);
     }
 
     #[test]
     fn test_radius_from_tokens_mid() {
         let r = radius_from_tokens(10_000);
-        assert!(r > 3.0, "10k tokens should be above min, got {}", r);
-        assert!(r < 20.0, "10k tokens should be below max, got {}", r);
+        assert!(r > 6.0, "10k tokens should be above min, got {}", r);
+        assert!(r < 25.0, "10k tokens should be below max, got {}", r);
     }
 
     #[test]
@@ -561,7 +569,7 @@ mod tests {
         assert_eq!(s.agent_id, "test");
         assert_eq!(s.position, (10.0, 20.0));
         assert_eq!(s.velocity, (0.0, 0.0));
-        assert_eq!(s.base_radius, 3.0);
+        assert_eq!(s.base_radius, 6.0);
         assert_eq!(s.pulse_phase, 0.0);
         assert_eq!(s.color, (255, 0, 0));
         assert_eq!(s.status, SphereStatus::Idle);
@@ -571,8 +579,8 @@ mod tests {
     #[test]
     fn test_effective_radius_at_zero_phase() {
         let s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
-        // Idle: amplitude=1.0, sin(0)=0 → base_radius + 0 = 3.0
-        assert_eq!(s.effective_radius(), 3.0);
+        // Idle: amplitude=1.0, sin(0)=0 → base_radius + 0 = 6.0
+        assert_eq!(s.effective_radius(), 6.0);
     }
 
     #[test]
@@ -580,8 +588,8 @@ mod tests {
         let mut s = Sphere::new("a".into(), (0.0, 0.0), (0, 0, 0));
         s.status = SphereStatus::Running;
         s.pulse_phase = std::f32::consts::FRAC_PI_2; // sin(π/2) = 1.0
-        // Running: amplitude=3.0, base=3.0 → 3.0 + 3.0 = 6.0
-        assert!((s.effective_radius() - 6.0).abs() < 0.01);
+        // Running: amplitude=3.0, base=6.0 → 6.0 + 3.0 = 9.0
+        assert!((s.effective_radius() - 9.0).abs() < 0.01);
     }
 
     #[test]
@@ -678,11 +686,11 @@ mod tests {
         tree.root = Some(Agent::new("root".into(), "Main".into()));
 
         renderer.sync_spheres(&tree, (50.0, 50.0));
-        assert_eq!(renderer.spheres[0].base_radius, 3.0); // no tokens = min
+        assert_eq!(renderer.spheres[0].base_radius, 6.0); // no tokens = min
 
         tree.root.as_mut().unwrap().token_usage = Some(TokenUsage { input: 5000, output: 5000 });
         renderer.sync_spheres(&tree, (50.0, 50.0));
-        assert!(renderer.spheres[0].base_radius > 3.0, "should grow with tokens");
+        assert!(renderer.spheres[0].base_radius > 6.0, "should grow with tokens");
     }
 
     // --- Physics edge cases ---
