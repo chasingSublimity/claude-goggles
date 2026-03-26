@@ -141,6 +141,18 @@ fn run_tui(initial_mode: VizMode) -> anyhow::Result<()> {
                         }
                         _ => {}
                     }
+                    _ if viz_mode == VizMode::Bloom => {
+                        if let Some(ref mut bloom) = bloom_renderer {
+                            match key.code {
+                                KeyCode::Char('[') => bloom.params.cycle(false),
+                                KeyCode::Char(']') => bloom.params.cycle(true),
+                                KeyCode::Char('+') | KeyCode::Char('=') => bloom.params.nudge(true),
+                                KeyCode::Char('-') => bloom.params.nudge(false),
+                                KeyCode::Char('r') => bloom.params.reset(),
+                                _ => {}
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
