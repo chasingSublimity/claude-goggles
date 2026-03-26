@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -66,8 +67,8 @@ pub struct AgentTree {
     pub session_id: Option<String>,
     pub root: Option<Agent>,
     pub dropped_events: u64,
-    /// Maps parent agent ID → Vec<(tool_use_id, description)> for pending Agent tool calls
-    pub pending_spawns: std::collections::HashMap<String, Vec<(String, String)>>,
+    /// FIFO queue of (parent_agent_id, tool_use_id, description) for pending Agent spawns
+    pub pending_spawns: VecDeque<(String, String, String)>,
 }
 
 impl AgentTree {
@@ -76,7 +77,7 @@ impl AgentTree {
             session_id: None,
             root: None,
             dropped_events: 0,
-            pending_spawns: std::collections::HashMap::new(),
+            pending_spawns: VecDeque::new(),
         }
     }
 
@@ -87,6 +88,47 @@ impl AgentTree {
             Some(id) => root.find_mut(id),
         }
     }
+
+    /// Return a mutable reference to the nth visible agent (depth-first order).
+    /// Respects collapsed state — children of collapsed agents are skipped.
+    pub fn nth_visible_agent_mut(&mut self, n: usize) -> Option<&mut Agent> {
+        let root = self.root.as_mut()?;
+        let mut counter = 0;
+        nth_visible_recursive(root, n, &mut counter)
+    }
+
+    /// Count the number of visible agents (respecting collapsed state).
+    pub fn visible_agent_count(&self) -> usize {
+        match &self.root {
+            None => 0,
+            Some(root) => count_visible(root),
+        }
+    }
+}
+
+fn nth_visible_recursive<'a>(agent: &'a mut Agent, target: usize, counter: &mut usize) -> Option<&'a mut Agent> {
+    if *counter == target {
+        return Some(agent);
+    }
+    *counter += 1;
+    if !agent.collapsed {
+        for child in &mut agent.children {
+            if let Some(found) = nth_visible_recursive(child, target, counter) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn count_visible(agent: &Agent) -> usize {
+    let mut count = 1;
+    if !agent.collapsed {
+        for child in &agent.children {
+            count += count_visible(child);
+        }
+    }
+    count
 }
 
 pub mod update;
@@ -129,5 +171,108 @@ mod tests {
         tree.root = Some(Agent::new("root".into(), "Main".into()));
         assert!(tree.find_agent_mut(None).is_some());
         assert_eq!(tree.find_agent_mut(None).unwrap().id, "root");
+    }
+
+    #[test]
+    fn test_find_mut_depth_3() {
+        let mut root = Agent::new("root".into(), "Main".into());
+        let mut child = Agent::new("child".into(), "Level 1".into());
+        let grandchild = Agent::new("grandchild".into(), "Level 2".into());
+        child.children.push(grandchild);
+        root.children.push(child);
+
+        let found = root.find_mut("grandchild");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().task, "Level 2");
+    }
+
+    #[test]
+    fn test_find_agent_mut_some_id() {
+        let mut tree = AgentTree::new();
+        let mut root = Agent::new("root".into(), "Main".into());
+        root.children.push(Agent::new("child-1".into(), "Sub task".into()));
+        tree.root = Some(root);
+
+        let found = tree.find_agent_mut(Some("child-1"));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, "child-1");
+    }
+
+    #[test]
+    fn test_find_agent_mut_root_is_none() {
+        let mut tree = AgentTree::new();
+        assert!(tree.find_agent_mut(None).is_none());
+        assert!(tree.find_agent_mut(Some("anything")).is_none());
+    }
+
+    #[test]
+    fn test_visible_agent_count_with_collapsed() {
+        let mut tree = AgentTree::new();
+        let mut root = Agent::new("root".into(), "Main".into());
+
+        let mut child1 = Agent::new("c1".into(), "Task 1".into());
+        child1.children.push(Agent::new("c1a".into(), "Subtask 1a".into()));
+        child1.children.push(Agent::new("c1b".into(), "Subtask 1b".into()));
+        child1.collapsed = true; // collapse child1, hiding c1a and c1b
+
+        let child2 = Agent::new("c2".into(), "Task 2".into());
+
+        root.children.push(child1);
+        root.children.push(child2);
+        tree.root = Some(root);
+
+        // root + c1 (collapsed, so c1a/c1b hidden) + c2 = 3
+        assert_eq!(tree.visible_agent_count(), 3);
+    }
+
+    #[test]
+    fn test_visible_agent_count_all_expanded() {
+        let mut tree = AgentTree::new();
+        let mut root = Agent::new("root".into(), "Main".into());
+        let mut child = Agent::new("c1".into(), "Task 1".into());
+        child.children.push(Agent::new("c1a".into(), "Subtask".into()));
+        root.children.push(child);
+        tree.root = Some(root);
+
+        // root + c1 + c1a = 3
+        assert_eq!(tree.visible_agent_count(), 3);
+    }
+
+    #[test]
+    fn test_nth_visible_agent_mut_basic() {
+        let mut tree = AgentTree::new();
+        let mut root = Agent::new("root".into(), "Main".into());
+        root.children.push(Agent::new("c1".into(), "Task 1".into()));
+        root.children.push(Agent::new("c2".into(), "Task 2".into()));
+        tree.root = Some(root);
+
+        // Index 0 = root, 1 = c1, 2 = c2
+        assert_eq!(tree.nth_visible_agent_mut(0).unwrap().id, "root");
+        assert_eq!(tree.nth_visible_agent_mut(1).unwrap().id, "c1");
+        assert_eq!(tree.nth_visible_agent_mut(2).unwrap().id, "c2");
+        assert!(tree.nth_visible_agent_mut(3).is_none());
+    }
+
+    #[test]
+    fn test_nth_visible_agent_mut_with_collapsed() {
+        let mut tree = AgentTree::new();
+        let mut root = Agent::new("root".into(), "Main".into());
+
+        let mut child1 = Agent::new("c1".into(), "Task 1".into());
+        child1.children.push(Agent::new("c1a".into(), "Subtask 1a".into()));
+        child1.children.push(Agent::new("c1b".into(), "Subtask 1b".into()));
+        child1.collapsed = true; // collapse: c1a and c1b should be skipped
+
+        let child2 = Agent::new("c2".into(), "Task 2".into());
+
+        root.children.push(child1);
+        root.children.push(child2);
+        tree.root = Some(root);
+
+        // Index 0 = root, 1 = c1 (collapsed), 2 = c2 (c1a/c1b skipped)
+        assert_eq!(tree.nth_visible_agent_mut(0).unwrap().id, "root");
+        assert_eq!(tree.nth_visible_agent_mut(1).unwrap().id, "c1");
+        assert_eq!(tree.nth_visible_agent_mut(2).unwrap().id, "c2");
+        assert!(tree.nth_visible_agent_mut(3).is_none());
     }
 }

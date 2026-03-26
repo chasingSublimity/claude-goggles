@@ -13,7 +13,7 @@ impl SocketListener {
     }
 
     /// Remove stale socket file if it exists
-    pub fn cleanup_stale(&self) {
+    fn cleanup_stale(&self) {
         if self.path.exists() {
             let _ = std::fs::remove_file(&self.path);
         }
@@ -58,9 +58,65 @@ async fn handle_connection(
     stream.read_to_end(&mut buf).await?;
     let json = String::from_utf8_lossy(&buf);
     if let Some(event) = super::parse_hook_event(&json) {
+        let event = resolve_transcript_usage(event).await;
         let _ = tx.send(event).await;
     }
     Ok(())
+}
+
+/// Resolve token_usage from transcript files without blocking the async executor.
+async fn resolve_transcript_usage(event: HookEvent) -> HookEvent {
+    match event {
+        HookEvent::SubagentStop {
+            session_id,
+            agent_id,
+            agent_type,
+            transcript_path,
+            ..
+        } => {
+            let token_usage = if let Some(ref path) = transcript_path {
+                let path = std::path::PathBuf::from(path);
+                tokio::task::spawn_blocking(move || {
+                    super::transcript::parse_transcript_usage(&path)
+                })
+                .await
+                .ok()
+                .flatten()
+            } else {
+                None
+            };
+            HookEvent::SubagentStop {
+                session_id,
+                agent_id,
+                agent_type,
+                token_usage,
+                transcript_path,
+            }
+        }
+        HookEvent::Stop {
+            session_id,
+            transcript_path,
+            ..
+        } => {
+            let token_usage = if let Some(ref path) = transcript_path {
+                let path = std::path::PathBuf::from(path);
+                tokio::task::spawn_blocking(move || {
+                    super::transcript::parse_transcript_usage(&path)
+                })
+                .await
+                .ok()
+                .flatten()
+            } else {
+                None
+            };
+            HookEvent::Stop {
+                session_id,
+                token_usage,
+                transcript_path,
+            }
+        }
+        other => other,
+    }
 }
 
 #[cfg(test)]

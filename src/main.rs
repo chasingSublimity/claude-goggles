@@ -45,10 +45,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_tui() -> anyhow::Result<()> {
-    let sock_path = dirs::home_dir()
-        .expect("no home dir")
-        .join(".claude-goggles")
-        .join("goggles.sock");
+    let sock_path = cli::socket_dir()?.join("goggles.sock");
 
     let rt = tokio::runtime::Runtime::new()?;
     let (tx, mut rx) = mpsc::channel(1000);
@@ -70,6 +67,7 @@ fn run_tui() -> anyhow::Result<()> {
     let renderer = TreeViewRenderer;
     let mut tree = AgentTree::new();
     let mut scroll_offset: usize = 0;
+    let mut selected: usize = 0;
 
     loop {
         // Drain events from socket
@@ -77,9 +75,11 @@ fn run_tui() -> anyhow::Result<()> {
             apply_event(&mut tree, ev);
         }
 
+        let visible_count = tree.visible_agent_count();
+
         // Render
         terminal.draw(|frame| {
-            renderer.render(&tree, frame, scroll_offset);
+            renderer.render(&tree, frame, scroll_offset, selected);
         })?;
 
         // Handle input (100ms timeout = ~10fps)
@@ -89,13 +89,27 @@ fn run_tui() -> anyhow::Result<()> {
                     KeyCode::Char('q') => break,
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                     KeyCode::Up | KeyCode::Char('k') => {
-                        scroll_offset = scroll_offset.saturating_sub(1);
+                        selected = selected.saturating_sub(1);
+                        // Auto-scroll: each agent takes 2 lines, plus 1 session header line
+                        let selected_line = selected * 2 + 1;
+                        if selected_line < scroll_offset {
+                            scroll_offset = selected_line;
+                        }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        scroll_offset += 1;
+                        if visible_count > 0 {
+                            selected = (selected + 1).min(visible_count - 1);
+                        }
+                        let selected_line = selected * 2 + 1;
+                        let area_height = terminal.size()?.height.saturating_sub(2) as usize;
+                        if selected_line + 2 > scroll_offset + area_height {
+                            scroll_offset = (selected_line + 2).saturating_sub(area_height);
+                        }
                     }
                     KeyCode::Char('c') => {
-                        // TODO: collapse/expand selected agent
+                        if let Some(agent) = tree.nth_visible_agent_mut(selected) {
+                            agent.collapsed = !agent.collapsed;
+                        }
                     }
                     _ => {}
                 }
