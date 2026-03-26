@@ -105,7 +105,7 @@ fn run_tui(initial_mode: VizMode) -> anyhow::Result<()> {
             }
         })?;
 
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') => break,
