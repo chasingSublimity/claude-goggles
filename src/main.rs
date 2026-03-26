@@ -64,7 +64,7 @@ fn run_tui() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let renderer = TreeViewRenderer;
+    let mut renderer = TreeViewRenderer;
     let mut tree = AgentTree::new();
     let mut scroll_offset: usize = 0;
     let mut selected: usize = 0;

@@ -7,7 +7,7 @@ use super::Renderer;
 pub struct TreeViewRenderer;
 
 impl Renderer for TreeViewRenderer {
-    fn render(&self, tree: &AgentTree, frame: &mut Frame, scroll_offset: usize, selected: usize) {
+    fn render(&mut self, tree: &AgentTree, frame: &mut Frame, scroll_offset: usize, selected: usize) {
         let area = frame.area();
 
         // Split into main area and footer
