@@ -8,12 +8,6 @@ pub struct TokenUsage {
 }
 
 #[derive(Debug, Clone)]
-pub struct ToolCall {
-    pub tool_name: String,
-    pub key_arg: String,
-}
-
-#[derive(Debug, Clone)]
 pub enum AgentStatus {
     Idle,
     Running { tool_name: String, key_arg: String },
@@ -28,7 +22,6 @@ pub struct Agent {
     pub started_at: Instant,
     pub finished_at: Option<Instant>,
     pub token_usage: Option<TokenUsage>,
-    pub tool_history: Vec<ToolCall>,
     pub children: Vec<Agent>,
     pub collapsed: bool,
 }
@@ -42,7 +35,6 @@ impl Agent {
             started_at: Instant::now(),
             finished_at: None,
             token_usage: None,
-            tool_history: Vec::new(),
             children: Vec::new(),
             collapsed: false,
         }

@@ -1,4 +1,4 @@
-use super::{Agent, AgentStatus, AgentTree, ToolCall};
+use super::{Agent, AgentStatus, AgentTree};
 use crate::events::HookEvent;
 
 /// Apply a hook event to the agent tree. Pure function — no IO.
@@ -26,13 +26,10 @@ pub fn apply_event(tree: &mut AgentTree, event: HookEvent) {
         HookEvent::PostToolUse {
             session_id,
             agent_id,
-            tool_name,
-            key_arg,
             ..
         } => {
             ensure_root(tree, &session_id);
             if let Some(agent) = tree.find_agent_mut(agent_id.as_deref()) {
-                agent.tool_history.push(ToolCall { tool_name, key_arg });
                 agent.status = AgentStatus::Idle;
             } else {
                 tree.dropped_events += 1;
@@ -113,13 +110,10 @@ mod tests {
         }
     }
 
-    fn make_post_tool_use(agent_id: Option<&str>, tool: &str, arg: &str) -> HookEvent {
+    fn make_post_tool_use(agent_id: Option<&str>, _tool: &str, _arg: &str) -> HookEvent {
         HookEvent::PostToolUse {
             session_id: "sess-1".into(),
             agent_id: agent_id.map(String::from),
-            tool_name: tool.into(),
-            key_arg: arg.into(),
-            tool_use_id: "tu-1".into(),
         }
     }
 
@@ -133,15 +127,13 @@ mod tests {
     }
 
     #[test]
-    fn test_post_tool_use_sets_idle_and_records_history() {
+    fn test_post_tool_use_sets_idle() {
         let mut tree = AgentTree::new();
         apply_event(&mut tree, make_pre_tool_use(None, "Read", "src/main.rs"));
         apply_event(&mut tree, make_post_tool_use(None, "Read", "src/main.rs"));
 
         let root = tree.root.as_ref().unwrap();
         assert!(matches!(root.status, AgentStatus::Idle));
-        assert_eq!(root.tool_history.len(), 1);
-        assert_eq!(root.tool_history[0].tool_name, "Read");
     }
 
     #[test]
@@ -330,9 +322,6 @@ mod tests {
         let root = tree.root.as_ref().unwrap();
         let child = &root.children[0];
         assert!(matches!(child.status, AgentStatus::Idle));
-        assert_eq!(child.tool_history.len(), 1);
-        assert_eq!(child.tool_history[0].tool_name, "Read");
-        assert_eq!(child.tool_history[0].key_arg, "lib.rs");
         assert_eq!(tree.dropped_events, 0);
     }
 

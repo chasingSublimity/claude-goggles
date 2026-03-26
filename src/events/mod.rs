@@ -18,9 +18,6 @@ pub enum HookEvent {
     PostToolUse {
         session_id: String,
         agent_id: Option<String>,
-        tool_name: String,
-        key_arg: String,
-        tool_use_id: String,
     },
     SubagentStart {
         session_id: String,
@@ -69,17 +66,10 @@ pub fn parse_hook_event(json: &str) -> Option<HookEvent> {
             })
         }
         "PostToolUse" => {
-            let tool_name = v.get("tool_name")?.as_str()?.to_string();
-            let tool_input = v.get("tool_input").cloned().unwrap_or(Value::Null);
-            let tool_use_id = v.get("tool_use_id")?.as_str()?.to_string();
             let agent_id = v.get("agent_id").and_then(|v| v.as_str()).map(String::from);
-            let key_arg = extract_key_arg(&tool_name, &tool_input);
             Some(HookEvent::PostToolUse {
                 session_id,
                 agent_id,
-                tool_name,
-                key_arg,
-                tool_use_id,
             })
         }
         "SubagentStart" => {
@@ -250,12 +240,9 @@ mod tests {
         }"#;
         let event = parse_hook_event(json).unwrap();
         match event {
-            HookEvent::PostToolUse { tool_name, key_arg, agent_id, session_id, tool_use_id } => {
-                assert_eq!(tool_name, "Read");
-                assert_eq!(key_arg, "/etc/hosts");
+            HookEvent::PostToolUse { agent_id, session_id } => {
                 assert_eq!(agent_id, Some("agent-7".to_string()));
                 assert_eq!(session_id, "sess-42");
-                assert_eq!(tool_use_id, "tu-99");
             }
             _ => panic!("expected PostToolUse variant"),
         }

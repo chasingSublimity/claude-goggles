@@ -1,0 +1,9 @@
+{"type":"server-started","port":63438,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:63438","screen_dir":"/Users/blake/code/claude-goggles/.superpowers/brainstorm/13828-1774489236"}
+{"type":"screen-added","file":"/Users/blake/code/claude-goggles/.superpowers/brainstorm/13828-1774489236/layout-options.html"}
+{"source":"user-event","type":"click","text":"B. Gravity Pack\n      Spheres cluster toward center, pushed apart by radius. No hierarchy encoding — just a lava-lamp-like cluster of activity. Simplest to implement, most organic feel.","choice":"b","id":null,"timestamp":1774489381906}
+{"source":"user-event","type":"click","text":"B. Gravity Pack\n      Spheres cluster toward center, pushed apart by radius. No hierarchy encoding — just a lava-lamp-like cluster of activity. Simplest to implement, most organic feel.","choice":"b","id":null,"timestamp":1774489389818}
+{"source":"user-event","type":"click","text":"B. Gravity Pack\n      Spheres cluster toward center, pushed apart by radius. No hierarchy encoding — just a lava-lamp-like cluster of activity. Simplest to implement, most organic feel.","choice":"b","id":null,"timestamp":1774489390293}
+{"source":"user-event","type":"click","text":"B. Gravity Pack\n      Spheres cluster toward center, pushed apart by radius. No hierarchy encoding — just a lava-lamp-like cluster of activity. Simplest to implement, most organic feel.","choice":"b","id":null,"timestamp":1774489390448}
+{"source":"user-event","type":"click","text":"B. Gravity Pack\n      Spheres cluster toward center, pushed apart by radius. No hierarchy encoding — just a lava-lamp-like cluster of activity. Simplest to implement, most organic feel.","choice":"b","id":null,"timestamp":1774489391083}
+{"type":"screen-added","file":"/Users/blake/code/claude-goggles/.superpowers/brainstorm/13828-1774489236/waiting.html"}
+{"type":"server-stopped","reason":"idle timeout"}
