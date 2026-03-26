@@ -21,6 +21,118 @@ const PALETTE: [(u8, u8, u8); 8] = [
 
 const INTENSITY_THRESHOLD: f32 = 0.05;
 
+// --- Tunable parameters ---
+
+const PARAM_COUNT: usize = 8;
+
+#[derive(Clone)]
+pub struct BloomParams {
+    pub radius_min: f32,
+    pub radius_max: f32,
+    pub bloom_spread_running: f32,
+    pub bloom_spread_idle: f32,
+    pub pulse_amp_running: f32,
+    pub pulse_amp_idle: f32,
+    pub gravity: f32,
+    pub repulsion_padding: f32,
+    pub selected: usize,
+}
+
+impl Default for BloomParams {
+    fn default() -> Self {
+        Self {
+            radius_min: 12.0,
+            radius_max: 45.0,
+            bloom_spread_running: 1.2,
+            bloom_spread_idle: 0.8,
+            pulse_amp_running: 5.0,
+            pulse_amp_idle: 2.0,
+            gravity: 0.02,
+            repulsion_padding: 10.0,
+            selected: 0,
+        }
+    }
+}
+
+impl BloomParams {
+    const STEPS: [f32; PARAM_COUNT] = [2.0, 2.0, 0.1, 0.1, 0.5, 0.5, 0.005, 2.0];
+    const MINS: [f32; PARAM_COUNT] = [4.0, 4.0, 0.1, 0.1, 0.0, 0.0, 0.0, 0.0];
+    const MAXS: [f32; PARAM_COUNT] = [60.0, 80.0, 3.0, 3.0, 15.0, 15.0, 0.1, 40.0];
+    const NAMES: [&str; PARAM_COUNT] = [
+        "sphere size (min)",
+        "sphere size (max)",
+        "bloom spread (run)",
+        "bloom spread (idle)",
+        "pulse amp (run)",
+        "pulse amp (idle)",
+        "gravity",
+        "repulsion padding",
+    ];
+
+    fn field_mut(&mut self, index: usize) -> &mut f32 {
+        match index {
+            0 => &mut self.radius_min,
+            1 => &mut self.radius_max,
+            2 => &mut self.bloom_spread_running,
+            3 => &mut self.bloom_spread_idle,
+            4 => &mut self.pulse_amp_running,
+            5 => &mut self.pulse_amp_idle,
+            6 => &mut self.gravity,
+            7 => &mut self.repulsion_padding,
+            _ => unreachable!(),
+        }
+    }
+
+    fn field(&self, index: usize) -> f32 {
+        match index {
+            0 => self.radius_min,
+            1 => self.radius_max,
+            2 => self.bloom_spread_running,
+            3 => self.bloom_spread_idle,
+            4 => self.pulse_amp_running,
+            5 => self.pulse_amp_idle,
+            6 => self.gravity,
+            7 => self.repulsion_padding,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn nudge(&mut self, up: bool) {
+        let idx = self.selected;
+        let step = Self::STEPS[idx];
+        let val = self.field_mut(idx);
+        if up {
+            *val = (*val + step).min(Self::MAXS[idx]);
+        } else {
+            *val = (*val - step).max(Self::MINS[idx]);
+        }
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn cycle(&mut self, forward: bool) {
+        if forward {
+            self.selected = (self.selected + 1) % PARAM_COUNT;
+        } else {
+            self.selected = (self.selected + PARAM_COUNT - 1) % PARAM_COUNT;
+        }
+    }
+
+    pub fn param_name(&self) -> &str {
+        Self::NAMES[self.selected]
+    }
+
+    pub fn param_value(&self) -> f32 {
+        self.field(self.selected)
+    }
+
+    pub fn bloom_spread_completed(&self) -> f32 {
+        self.bloom_spread_idle * 0.625
+    }
+}
+
 // --- Braille encoding ---
 
 /// Map a 2x4 dot matrix to a Unicode braille character.
@@ -747,6 +859,94 @@ mod tests {
         apply_repulsion(&mut a, &mut b);
         assert!(!a.velocity.0.is_nan());
         assert!(!b.velocity.0.is_nan());
+    }
+
+    // --- BloomParams tests ---
+
+    #[test]
+    fn test_bloom_params_default_values() {
+        let p = BloomParams::default();
+        assert_eq!(p.radius_min, 12.0);
+        assert_eq!(p.radius_max, 45.0);
+        assert_eq!(p.bloom_spread_running, 1.2);
+        assert_eq!(p.bloom_spread_idle, 0.8);
+        assert_eq!(p.pulse_amp_running, 5.0);
+        assert_eq!(p.pulse_amp_idle, 2.0);
+        assert_eq!(p.gravity, 0.02);
+        assert_eq!(p.repulsion_padding, 10.0);
+        assert_eq!(p.selected, 0);
+    }
+
+    #[test]
+    fn test_bloom_params_nudge_up() {
+        let mut p = BloomParams::default();
+        p.selected = 0; // radius_min, step=2.0
+        p.nudge(true);
+        assert_eq!(p.radius_min, 14.0);
+    }
+
+    #[test]
+    fn test_bloom_params_nudge_down() {
+        let mut p = BloomParams::default();
+        p.selected = 0; // radius_min, step=2.0
+        p.nudge(false);
+        assert_eq!(p.radius_min, 10.0);
+    }
+
+    #[test]
+    fn test_bloom_params_nudge_clamps_min() {
+        let mut p = BloomParams::default();
+        p.selected = 6; // gravity, default=0.02, step=0.005, min=0.0
+        for _ in 0..20 {
+            p.nudge(false);
+        }
+        assert!(p.gravity >= 0.0);
+    }
+
+    #[test]
+    fn test_bloom_params_nudge_clamps_max() {
+        let mut p = BloomParams::default();
+        p.selected = 6; // gravity, max=0.1
+        for _ in 0..100 {
+            p.nudge(true);
+        }
+        assert!(p.gravity <= 0.1);
+    }
+
+    #[test]
+    fn test_bloom_params_reset() {
+        let mut p = BloomParams::default();
+        p.radius_min = 99.0;
+        p.gravity = 0.09;
+        p.selected = 5;
+        p.reset();
+        assert_eq!(p.radius_min, 12.0);
+        assert_eq!(p.gravity, 0.02);
+        assert_eq!(p.selected, 0);
+    }
+
+    #[test]
+    fn test_bloom_params_cycle_wraps() {
+        let mut p = BloomParams::default();
+        p.selected = 7; // last param
+        p.cycle(true);
+        assert_eq!(p.selected, 0);
+
+        p.selected = 0;
+        p.cycle(false);
+        assert_eq!(p.selected, 7);
+    }
+
+    #[test]
+    fn test_bloom_params_param_name() {
+        let p = BloomParams::default();
+        assert_eq!(p.param_name(), "sphere size (min)");
+    }
+
+    #[test]
+    fn test_bloom_params_param_value() {
+        let p = BloomParams::default();
+        assert_eq!(p.param_value(), 12.0);
     }
 
 }
