@@ -60,6 +60,15 @@ impl Agent {
         }
         None
     }
+
+    /// Collect all agents in the tree as a flat list (depth-first).
+    pub fn all_agents(&self) -> Vec<&Agent> {
+        let mut result = vec![self];
+        for child in &self.children {
+            result.extend(child.all_agents());
+        }
+        result
+    }
 }
 
 #[derive(Debug)]
@@ -274,5 +283,18 @@ mod tests {
         assert_eq!(tree.nth_visible_agent_mut(1).unwrap().id, "c1");
         assert_eq!(tree.nth_visible_agent_mut(2).unwrap().id, "c2");
         assert!(tree.nth_visible_agent_mut(3).is_none());
+    }
+
+    #[test]
+    fn test_all_agents_flat_traversal() {
+        let mut root = Agent::new("root".into(), "Main".into());
+        let mut child = Agent::new("c1".into(), "Task 1".into());
+        child.children.push(Agent::new("c1a".into(), "Subtask".into()));
+        root.children.push(child);
+        root.children.push(Agent::new("c2".into(), "Task 2".into()));
+
+        let all = root.all_agents();
+        let ids: Vec<&str> = all.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["root", "c1", "c1a", "c2"]);
     }
 }
