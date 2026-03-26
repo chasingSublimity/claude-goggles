@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use ratatui::prelude::*;
 
-use crate::model::{AgentTree, AgentStatus};
+use crate::model::{Agent, AgentTree, AgentStatus};
 use super::Renderer;
 
 // --- Constants ---
@@ -40,7 +40,9 @@ fn braille_char(dots: [bool; 8]) -> char {
 // --- Color math ---
 
 fn bloom_falloff(distance_sq: f32, radius: f32, bloom_spread: f32) -> f32 {
-    debug_assert!(radius > 0.0 && bloom_spread > 0.0, "radius and bloom_spread must be positive");
+    if radius <= 0.0 || bloom_spread <= 0.0 {
+        return 0.0;
+    }
     (-distance_sq / (radius * radius * bloom_spread)).exp()
 }
 
@@ -66,6 +68,7 @@ enum SphereStatus {
     Completed,
 }
 
+#[derive(Debug)]
 struct Sphere {
     agent_id: String,
     position: (f32, f32),
@@ -182,13 +185,8 @@ impl BloomRenderer {
         }
     }
 
-    fn sync_spheres(&mut self, tree: &AgentTree, center: (f32, f32)) {
-        let agents = match &tree.root {
-            Some(root) => root.all_agents(),
-            None => return,
-        };
-
-        for agent in &agents {
+    fn sync_spheres(&mut self, agents: &HashMap<&str, &Agent>, center: (f32, f32)) {
+        for agent in agents.values() {
             if !self.known_agents.contains(&agent.id) {
                 let color = PALETTE[self.color_index % PALETTE.len()];
                 self.color_index += 1;
@@ -205,9 +203,9 @@ impl BloomRenderer {
             }
         }
 
-        // Update existing spheres
+        // Update existing spheres — O(1) lookup via HashMap
         for sphere in &mut self.spheres {
-            if let Some(agent) = agents.iter().find(|a| a.id == sphere.agent_id) {
+            if let Some(agent) = agents.get(sphere.agent_id.as_str()) {
                 let total_tokens = agent.token_usage.as_ref().map_or(0, |t| t.input + t.output);
                 sphere.base_radius = radius_from_tokens(total_tokens);
 
@@ -264,7 +262,7 @@ impl BloomRenderer {
             let spread = sphere.bloom_spread();
             let mult = sphere.color_multiplier();
             let (cr, cg, cb) = sphere.color;
-            let color = (cr as f32 * mult, cg as f32 * mult, cb as f32 * mult);
+            let color = (f32::from(cr) * mult, f32::from(cg) * mult, f32::from(cb) * mult);
 
             let r_ceil = (radius * 2.0).ceil() as i32;
             let cx = sphere.position.0;
@@ -358,13 +356,27 @@ impl Renderer for BloomRenderer {
         }
 
         let center = (new_w as f32 / 2.0, new_h as f32 / 2.0);
-        self.sync_spheres(tree, center);
+
+        let (agents_map, active, total, total_tokens) = match &tree.root {
+            Some(root) => {
+                let all = root.all_agents();
+                let total = all.len();
+                let active = all.iter().filter(|a| !matches!(a.status, AgentStatus::Completed)).count();
+                let tokens: u64 = all.iter().map(|a| a.token_usage.as_ref().map_or(0, |t| t.input + t.output)).sum();
+                let map: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
+                (Some(map), active, total, tokens)
+            }
+            None => (None, 0, 0, 0),
+        };
+
+        if let Some(agents) = &agents_map {
+            self.sync_spheres(agents, center);
+        }
         self.simulate(center);
         self.rasterize_and_composite();
         self.encode_to_frame(frame, canvas);
 
         // Footer
-        let (active, total, total_tokens) = count_and_tokens(tree);
         let token_str = if total_tokens >= 1000 {
             format!("{:.1}k tok", total_tokens as f64 / 1000.0)
         } else {
@@ -389,20 +401,6 @@ impl Renderer for BloomRenderer {
     }
 }
 
-fn count_and_tokens(tree: &AgentTree) -> (usize, usize, u64) {
-    match &tree.root {
-        None => (0, 0, 0),
-        Some(root) => {
-            let agents = root.all_agents();
-            let total = agents.len();
-            let active = agents.iter().filter(|a| !matches!(a.status, AgentStatus::Completed)).count();
-            let tokens: u64 = agents.iter().map(|a| {
-                a.token_usage.as_ref().map_or(0, |t| t.input + t.output)
-            }).sum();
-            (active, total, tokens)
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -528,13 +526,14 @@ mod tests {
     #[test]
     fn test_sphere_sync_adds_new_agents() {
         use crate::model::Agent;
+        use std::collections::HashMap;
         let mut renderer = BloomRenderer::new();
-        let mut tree = AgentTree::new();
         let mut root = Agent::new("root".into(), "Main".into());
         root.children.push(Agent::new("c1".into(), "Task 1".into()));
-        tree.root = Some(root);
+        let all = root.all_agents();
+        let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
 
-        renderer.sync_spheres(&tree, (100.0, 100.0));
+        renderer.sync_spheres(&agents, (100.0, 100.0));
 
         assert_eq!(renderer.spheres.len(), 2);
         assert!(renderer.known_agents.contains("root"));
@@ -546,18 +545,26 @@ mod tests {
     #[test]
     fn test_sphere_sync_updates_status() {
         use crate::model::{Agent, AgentStatus};
+        use std::collections::HashMap;
         let mut renderer = BloomRenderer::new();
-        let mut tree = AgentTree::new();
-        tree.root = Some(Agent::new("root".into(), "Main".into()));
+        let mut root = Agent::new("root".into(), "Main".into());
 
-        renderer.sync_spheres(&tree, (50.0, 50.0));
+        {
+            let all = root.all_agents();
+            let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
+            renderer.sync_spheres(&agents, (50.0, 50.0));
+        }
         assert_eq!(renderer.spheres[0].status, SphereStatus::Idle);
 
-        tree.root.as_mut().unwrap().status = AgentStatus::Running {
+        root.status = AgentStatus::Running {
             tool_name: "Read".into(),
             key_arg: "file.rs".into(),
         };
-        renderer.sync_spheres(&tree, (50.0, 50.0));
+        {
+            let all = root.all_agents();
+            let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
+            renderer.sync_spheres(&agents, (50.0, 50.0));
+        }
         assert_eq!(renderer.spheres[0].status, SphereStatus::Running);
     }
 
@@ -640,9 +647,11 @@ mod tests {
 
     #[test]
     fn test_sphere_sync_empty_tree() {
+        use crate::model::Agent;
+        use std::collections::HashMap;
         let mut renderer = BloomRenderer::new();
-        let tree = AgentTree::new(); // no root
-        renderer.sync_spheres(&tree, (50.0, 50.0));
+        let agents: HashMap<&str, &Agent> = HashMap::new();
+        renderer.sync_spheres(&agents, (50.0, 50.0));
         assert_eq!(renderer.spheres.len(), 0);
         assert!(renderer.known_agents.is_empty());
     }
@@ -650,30 +659,46 @@ mod tests {
     #[test]
     fn test_sphere_sync_idempotent() {
         use crate::model::Agent;
+        use std::collections::HashMap;
         let mut renderer = BloomRenderer::new();
-        let mut tree = AgentTree::new();
-        tree.root = Some(Agent::new("root".into(), "Main".into()));
+        let root = Agent::new("root".into(), "Main".into());
 
-        renderer.sync_spheres(&tree, (50.0, 50.0));
+        {
+            let all = root.all_agents();
+            let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
+            renderer.sync_spheres(&agents, (50.0, 50.0));
+        }
         assert_eq!(renderer.spheres.len(), 1);
 
         // Second sync with same tree should not add duplicates
-        renderer.sync_spheres(&tree, (50.0, 50.0));
+        {
+            let all = root.all_agents();
+            let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
+            renderer.sync_spheres(&agents, (50.0, 50.0));
+        }
         assert_eq!(renderer.spheres.len(), 1);
     }
 
     #[test]
     fn test_sphere_sync_sets_fade_on_completion() {
         use crate::model::{Agent, AgentStatus};
+        use std::collections::HashMap;
         let mut renderer = BloomRenderer::new();
-        let mut tree = AgentTree::new();
-        tree.root = Some(Agent::new("root".into(), "Main".into()));
+        let mut root = Agent::new("root".into(), "Main".into());
 
-        renderer.sync_spheres(&tree, (50.0, 50.0));
+        {
+            let all = root.all_agents();
+            let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
+            renderer.sync_spheres(&agents, (50.0, 50.0));
+        }
         assert!(renderer.spheres[0].fade_start.is_none());
 
-        tree.root.as_mut().unwrap().status = AgentStatus::Completed;
-        renderer.sync_spheres(&tree, (50.0, 50.0));
+        root.status = AgentStatus::Completed;
+        {
+            let all = root.all_agents();
+            let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
+            renderer.sync_spheres(&agents, (50.0, 50.0));
+        }
         assert!(renderer.spheres[0].fade_start.is_some());
         assert_eq!(renderer.spheres[0].status, SphereStatus::Completed);
     }
@@ -681,15 +706,23 @@ mod tests {
     #[test]
     fn test_sphere_sync_updates_radius_from_tokens() {
         use crate::model::{Agent, TokenUsage};
+        use std::collections::HashMap;
         let mut renderer = BloomRenderer::new();
-        let mut tree = AgentTree::new();
-        tree.root = Some(Agent::new("root".into(), "Main".into()));
+        let mut root = Agent::new("root".into(), "Main".into());
 
-        renderer.sync_spheres(&tree, (50.0, 50.0));
+        {
+            let all = root.all_agents();
+            let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
+            renderer.sync_spheres(&agents, (50.0, 50.0));
+        }
         assert_eq!(renderer.spheres[0].base_radius, 6.0); // no tokens = min
 
-        tree.root.as_mut().unwrap().token_usage = Some(TokenUsage { input: 5000, output: 5000 });
-        renderer.sync_spheres(&tree, (50.0, 50.0));
+        root.token_usage = Some(TokenUsage { input: 5000, output: 5000 });
+        {
+            let all = root.all_agents();
+            let agents: HashMap<&str, &Agent> = all.into_iter().map(|a| (a.id.as_str(), a)).collect();
+            renderer.sync_spheres(&agents, (50.0, 50.0));
+        }
         assert!(renderer.spheres[0].base_radius > 6.0, "should grow with tokens");
     }
 
@@ -720,33 +753,4 @@ mod tests {
         assert!(!b.velocity.0.is_nan());
     }
 
-    // --- count_and_tokens helper ---
-
-    #[test]
-    fn test_count_and_tokens_empty_tree() {
-        let tree = AgentTree::new();
-        assert_eq!(count_and_tokens(&tree), (0, 0, 0));
-    }
-
-    #[test]
-    fn test_count_and_tokens_mixed_status() {
-        use crate::model::{Agent, AgentStatus, TokenUsage};
-        let mut tree = AgentTree::new();
-        let mut root = Agent::new("root".into(), "Main".into());
-        root.token_usage = Some(TokenUsage { input: 100, output: 200 });
-
-        let mut child = Agent::new("c1".into(), "Task".into());
-        child.status = AgentStatus::Completed;
-        child.token_usage = Some(TokenUsage { input: 300, output: 400 });
-        root.children.push(child);
-
-        // Child with no tokens
-        root.children.push(Agent::new("c2".into(), "Task 2".into()));
-
-        tree.root = Some(root);
-        let (active, total, tokens) = count_and_tokens(&tree);
-        assert_eq!(total, 3);
-        assert_eq!(active, 2); // root + c2 active, c1 completed
-        assert_eq!(tokens, 1000); // 100+200 + 300+400 + 0
-    }
 }
