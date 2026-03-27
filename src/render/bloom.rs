@@ -25,6 +25,7 @@ const INTENSITY_THRESHOLD: f32 = 0.05;
 
 const PARAM_COUNT: usize = 8;
 
+/// Tunable parameters for the bloom visualization (sphere sizes, bloom spread, physics).
 #[derive(Clone)]
 pub struct BloomParams {
     pub radius_min: f32,

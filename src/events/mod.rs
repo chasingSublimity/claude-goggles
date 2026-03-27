@@ -4,6 +4,10 @@ use serde_json::Value;
 pub mod socket;
 pub mod transcript;
 
+/// A parsed hook event from Claude Code's event system.
+///
+/// Each variant corresponds to a lifecycle event emitted by Claude Code hooks
+/// over the Unix Domain Socket.
 #[derive(Debug)]
 pub enum HookEvent {
     PreToolUse {
@@ -38,6 +42,9 @@ pub enum HookEvent {
     },
 }
 
+/// Parse a JSON string from a hook event into a typed `HookEvent`.
+///
+/// Returns `None` if the JSON is malformed or represents an unknown event type.
 pub fn parse_hook_event(json: &str) -> Option<HookEvent> {
     let v: Value = serde_json::from_str(json).ok()?;
     let event_name = v.get("hook_event_name")?.as_str()?;

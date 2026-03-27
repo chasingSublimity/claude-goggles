@@ -1,12 +1,14 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+/// Input and output token counts for an agent's session.
 #[derive(Debug, Clone)]
 pub struct TokenUsage {
     pub input: u64,
     pub output: u64,
 }
 
+/// The current activity state of an agent.
 #[derive(Debug, Clone)]
 pub enum AgentStatus {
     Idle,
@@ -14,6 +16,7 @@ pub enum AgentStatus {
     Completed,
 }
 
+/// A single agent node in the agent tree, with its status, timing, and children.
 #[derive(Debug, Clone)]
 pub struct Agent {
     pub id: String,
@@ -63,6 +66,7 @@ impl Agent {
     }
 }
 
+/// The top-level data structure tracking an entire Claude Code session's agent hierarchy.
 #[derive(Debug)]
 pub struct AgentTree {
     pub session_id: Option<String>,
