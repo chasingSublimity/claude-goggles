@@ -191,4 +191,45 @@ mod tests {
         assert_eq!(pre.len(), 1);
         assert_eq!(pre[0]["hooks"][0]["command"].as_str().unwrap(), "echo existing");
     }
+
+    #[test]
+    fn test_remove_hooks_no_hooks_section() {
+        let settings = r#"{ "some_other_key": true }"#;
+        let result = remove_hooks(settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        // Should not crash, hooks section stays absent
+        assert!(v.get("some_other_key").unwrap().as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_remove_hooks_empty_hooks() {
+        let settings = r#"{ "hooks": {} }"#;
+        let result = remove_hooks(settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(v["hooks"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_remove_hooks_no_goggles_entries() {
+        let settings = r#"{
+            "hooks": {
+                "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "echo hi" }] }]
+            }
+        }"#;
+        let result = remove_hooks(settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let pre = v["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 1, "non-goggles hooks should be preserved");
+    }
+
+    #[test]
+    fn test_merge_then_remove_roundtrip() {
+        let original = r#"{ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "echo existing" }] }] } }"#;
+        let merged = merge_hooks(original).unwrap();
+        let cleaned = remove_hooks(&merged).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&cleaned).unwrap();
+        let pre = v["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 1);
+        assert_eq!(pre[0]["hooks"][0]["command"].as_str().unwrap(), "echo existing");
+    }
 }
