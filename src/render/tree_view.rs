@@ -176,6 +176,13 @@ fn format_duration(started: Instant) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Agent, AgentStatus};
+
+    fn lines_to_text(lines: &[Line]) -> Vec<String> {
+        lines.iter().map(|line| {
+            line.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+        }).collect()
+    }
 
     #[test]
     fn test_format_duration_pattern() {
@@ -184,5 +191,93 @@ mod tests {
         assert!(result.contains('m'), "expected 'm' in duration string: {}", result);
         assert!(result.contains('s'), "expected 's' in duration string: {}", result);
         assert!(result.starts_with("0m"), "expected to start with '0m': {}", result);
+    }
+
+    #[test]
+    fn test_render_agent_root_idle() {
+        let root = Agent::new("root".into(), "Main task".into());
+        let mut lines = Vec::new();
+        let mut agent_index = 0;
+        render_agent(&mut lines, &root, "", true, 999, &mut agent_index);
+
+        let text = lines_to_text(&lines);
+        assert_eq!(text.len(), 2, "should produce 2 lines (name + status)");
+        assert!(text[0].contains("root"), "first line should contain agent id");
+        assert!(text[0].contains("Main task"), "first line should contain task");
+        assert!(text[1].contains("idle"), "second line should show idle status");
+    }
+
+    #[test]
+    fn test_render_agent_running_shows_tool() {
+        let mut root = Agent::new("root".into(), "Main".into());
+        root.status = AgentStatus::Running {
+            tool_name: "Read".into(),
+            key_arg: "/src/main.rs".into(),
+        };
+        let mut lines = Vec::new();
+        let mut agent_index = 0;
+        render_agent(&mut lines, &root, "", true, 999, &mut agent_index);
+
+        let text = lines_to_text(&lines);
+        assert!(text[1].contains("Read"), "status line should show tool name");
+        assert!(text[1].contains("/src/main.rs"), "status line should show key arg");
+    }
+
+    #[test]
+    fn test_render_agent_completed_shows_done() {
+        let mut root = Agent::new("root".into(), "Main".into());
+        root.status = AgentStatus::Completed;
+        let mut lines = Vec::new();
+        let mut agent_index = 0;
+        render_agent(&mut lines, &root, "", true, 999, &mut agent_index);
+
+        let text = lines_to_text(&lines);
+        assert!(text[1].contains("done"), "completed agent should show 'done'");
+    }
+
+    #[test]
+    fn test_render_agent_with_children() {
+        let mut root = Agent::new("root".into(), "Main".into());
+        root.children.push(Agent::new("c1".into(), "Sub 1".into()));
+        root.children.push(Agent::new("c2".into(), "Sub 2".into()));
+        let mut lines = Vec::new();
+        let mut agent_index = 0;
+        render_agent(&mut lines, &root, "", true, 999, &mut agent_index);
+
+        let text = lines_to_text(&lines);
+        // root (2 lines) + c1 (2 lines) + c2 (2 lines) = 6
+        assert_eq!(text.len(), 6, "root + 2 children = 6 lines, got {}", text.len());
+        assert!(text[2].contains("c1"), "third line should be first child");
+        assert!(text[4].contains("c2"), "fifth line should be second child");
+    }
+
+    #[test]
+    fn test_render_agent_collapsed_hides_children() {
+        let mut root = Agent::new("root".into(), "Main".into());
+        root.children.push(Agent::new("c1".into(), "Sub 1".into()));
+        root.collapsed = true;
+        let mut lines = Vec::new();
+        let mut agent_index = 0;
+        render_agent(&mut lines, &root, "", true, 999, &mut agent_index);
+
+        let text = lines_to_text(&lines);
+        assert_eq!(text.len(), 2, "collapsed root should hide children");
+        assert!(text[0].contains("[+]"), "collapsed node should show [+] indicator");
+    }
+
+    #[test]
+    fn test_render_agent_selection_highlight() {
+        let root = Agent::new("root".into(), "Main".into());
+        let mut lines = Vec::new();
+        let mut agent_index = 0;
+        // selected=0 means root is selected
+        render_agent(&mut lines, &root, "", true, 0, &mut agent_index);
+
+        // Check that the selected line has a background color set
+        let first_line = &lines[0];
+        let has_bg = first_line.spans.iter().any(|s| {
+            matches!(s.style.bg, Some(Color::DarkGray))
+        });
+        assert!(has_bg, "selected agent should have DarkGray background");
     }
 }
