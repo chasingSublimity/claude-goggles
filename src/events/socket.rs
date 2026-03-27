@@ -122,6 +122,7 @@ async fn resolve_transcript_usage(event: HookEvent) -> HookEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixStream;
 
@@ -191,5 +192,87 @@ mod tests {
         assert!(matches!(event, HookEvent::Stop { .. }));
 
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_resolve_transcript_subagent_stop_with_file() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#).unwrap();
+        f.flush().unwrap();
+
+        let event = HookEvent::SubagentStop {
+            session_id: "s1".into(),
+            agent_id: "a1".into(),
+            agent_type: "Explore".into(),
+            token_usage: None,
+            transcript_path: Some(f.path().to_string_lossy().to_string()),
+        };
+
+        let resolved = resolve_transcript_usage(event).await;
+        match resolved {
+            HookEvent::SubagentStop { token_usage, .. } => {
+                let usage = token_usage.expect("should have resolved token usage");
+                assert_eq!(usage.input, 100);
+                assert_eq!(usage.output, 50);
+            }
+            _ => panic!("expected SubagentStop"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_transcript_subagent_stop_no_path() {
+        let event = HookEvent::SubagentStop {
+            session_id: "s1".into(),
+            agent_id: "a1".into(),
+            agent_type: "Explore".into(),
+            token_usage: None,
+            transcript_path: None,
+        };
+
+        let resolved = resolve_transcript_usage(event).await;
+        match resolved {
+            HookEvent::SubagentStop { token_usage, .. } => {
+                assert!(token_usage.is_none());
+            }
+            _ => panic!("expected SubagentStop"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_transcript_stop_with_file() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"usage":{{"input_tokens":500,"output_tokens":200}}}}}}"#).unwrap();
+        f.flush().unwrap();
+
+        let event = HookEvent::Stop {
+            session_id: "s1".into(),
+            token_usage: None,
+            transcript_path: Some(f.path().to_string_lossy().to_string()),
+        };
+
+        let resolved = resolve_transcript_usage(event).await;
+        match resolved {
+            HookEvent::Stop { token_usage, .. } => {
+                let usage = token_usage.expect("should have resolved token usage");
+                assert_eq!(usage.input, 500);
+                assert_eq!(usage.output, 200);
+            }
+            _ => panic!("expected Stop"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_transcript_passthrough_other_events() {
+        let event = HookEvent::PreToolUse {
+            session_id: "s1".into(),
+            agent_id: None,
+            tool_name: "Read".into(),
+            key_arg: "file.rs".into(),
+            tool_use_id: "tu-1".into(),
+            spawns_agent: None,
+        };
+
+        let resolved = resolve_transcript_usage(event).await;
+        assert!(matches!(resolved, HookEvent::PreToolUse { .. }));
     }
 }
