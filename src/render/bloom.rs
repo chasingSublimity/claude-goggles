@@ -241,6 +241,14 @@ impl Sphere {
     fn is_faded_out(&self) -> bool {
         matches!(self.fade_start, Some(t) if t.elapsed().as_secs_f32() >= 3.0)
     }
+
+    fn min_speed(&self) -> f32 {
+        match self.status {
+            SphereStatus::Running => 2.0,
+            SphereStatus::Idle => 0.5,
+            SphereStatus::Completed => 0.0,
+        }
+    }
 }
 
 const EDGE_RESTITUTION: f32 = 0.8;
@@ -261,6 +269,26 @@ fn apply_edge_bounce(sphere: &mut Sphere, bounds: (f32, f32), params: &BloomPara
         sphere.position.1 = bounds.1 - r;
         sphere.velocity.1 = -(sphere.velocity.1.abs() * EDGE_RESTITUTION);
     }
+}
+
+fn apply_ambient_impulse(sphere: &mut Sphere) {
+    let min = sphere.min_speed();
+    if min == 0.0 {
+        return;
+    }
+    let speed = (sphere.velocity.0.powi(2) + sphere.velocity.1.powi(2)).sqrt();
+    if speed >= min {
+        return;
+    }
+    // Use current direction if moving, otherwise derive from pulse_phase
+    let (dx, dy) = if speed > 0.01 {
+        (sphere.velocity.0 / speed, sphere.velocity.1 / speed)
+    } else {
+        (sphere.pulse_phase.cos(), sphere.pulse_phase.sin())
+    };
+    let boost = (min - speed) * 0.3;
+    sphere.velocity.0 += dx * boost;
+    sphere.velocity.1 += dy * boost;
 }
 
 fn apply_gravity(sphere: &mut Sphere, center: (f32, f32), gravity: f32) {
@@ -376,6 +404,8 @@ impl BloomRenderer {
 
         let bounds = (self.buf_width as f32, self.buf_height as f32);
         for sphere in &mut self.spheres {
+            apply_ambient_impulse(sphere);
+
             sphere.velocity.0 *= 0.9;
             sphere.velocity.1 *= 0.9;
             sphere.position.0 += sphere.velocity.0;
@@ -868,6 +898,65 @@ mod tests {
             renderer.sync_spheres(&agents, (50.0, 50.0));
         }
         assert!(renderer.spheres[0].base_radius > 12.0, "should grow with tokens");
+    }
+
+    // --- Ambient velocity tests ---
+
+    #[test]
+    fn test_min_speed_by_status() {
+        let mut s = Sphere::new("a".into(), (50.0, 50.0), (255, 0, 0));
+
+        s.status = SphereStatus::Running;
+        assert!(s.min_speed() > 0.0, "running should have nonzero min speed");
+
+        let running_speed = s.min_speed();
+        s.status = SphereStatus::Idle;
+        assert!(s.min_speed() > 0.0, "idle should have nonzero min speed");
+        assert!(s.min_speed() < running_speed, "idle should be slower than running");
+
+        s.status = SphereStatus::Completed;
+        assert_eq!(s.min_speed(), 0.0, "completed should have zero min speed");
+    }
+
+    #[test]
+    fn test_ambient_impulse_boosts_slow_sphere() {
+        let mut s = Sphere::new("a".into(), (50.0, 50.0), (255, 0, 0));
+        s.status = SphereStatus::Running;
+        s.velocity = (0.1, 0.0); // below min_speed
+        let speed_before = (s.velocity.0.powi(2) + s.velocity.1.powi(2)).sqrt();
+        apply_ambient_impulse(&mut s);
+        let speed_after = (s.velocity.0.powi(2) + s.velocity.1.powi(2)).sqrt();
+        assert!(speed_after > speed_before, "should boost slow sphere: {} > {}", speed_after, speed_before);
+    }
+
+    #[test]
+    fn test_ambient_impulse_no_effect_when_fast() {
+        let mut s = Sphere::new("a".into(), (50.0, 50.0), (255, 0, 0));
+        s.status = SphereStatus::Running;
+        s.velocity = (5.0, 5.0); // well above min_speed
+        let vel_before = s.velocity;
+        apply_ambient_impulse(&mut s);
+        assert_eq!(s.velocity, vel_before, "should not change fast sphere");
+    }
+
+    #[test]
+    fn test_ambient_impulse_no_effect_on_completed() {
+        let mut s = Sphere::new("a".into(), (50.0, 50.0), (255, 0, 0));
+        s.status = SphereStatus::Completed;
+        s.velocity = (0.0, 0.0);
+        apply_ambient_impulse(&mut s);
+        assert_eq!(s.velocity, (0.0, 0.0), "completed sphere should not get impulse");
+    }
+
+    #[test]
+    fn test_ambient_impulse_stationary_uses_phase_for_direction() {
+        let mut s = Sphere::new("a".into(), (50.0, 50.0), (255, 0, 0));
+        s.status = SphereStatus::Running;
+        s.velocity = (0.0, 0.0);
+        s.pulse_phase = 0.0; // cos(0)=1, sin(0)=0 → impulse in +x direction
+        apply_ambient_impulse(&mut s);
+        let speed = (s.velocity.0.powi(2) + s.velocity.1.powi(2)).sqrt();
+        assert!(speed > 0.0, "stationary sphere should get an impulse");
     }
 
     // --- Edge bounce tests ---
