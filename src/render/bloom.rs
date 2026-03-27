@@ -243,6 +243,26 @@ impl Sphere {
     }
 }
 
+const EDGE_RESTITUTION: f32 = 0.8;
+
+fn apply_edge_bounce(sphere: &mut Sphere, bounds: (f32, f32), params: &BloomParams) {
+    let r = sphere.effective_radius(params);
+    if sphere.position.0 < r {
+        sphere.position.0 = r;
+        sphere.velocity.0 = sphere.velocity.0.abs() * EDGE_RESTITUTION;
+    } else if sphere.position.0 > bounds.0 - r {
+        sphere.position.0 = bounds.0 - r;
+        sphere.velocity.0 = -(sphere.velocity.0.abs() * EDGE_RESTITUTION);
+    }
+    if sphere.position.1 < r {
+        sphere.position.1 = r;
+        sphere.velocity.1 = sphere.velocity.1.abs() * EDGE_RESTITUTION;
+    } else if sphere.position.1 > bounds.1 - r {
+        sphere.position.1 = bounds.1 - r;
+        sphere.velocity.1 = -(sphere.velocity.1.abs() * EDGE_RESTITUTION);
+    }
+}
+
 fn apply_gravity(sphere: &mut Sphere, center: (f32, f32), gravity: f32) {
     let dx = center.0 - sphere.position.0;
     let dy = center.1 - sphere.position.1;
@@ -354,11 +374,14 @@ impl BloomRenderer {
             }
         }
 
+        let bounds = (self.buf_width as f32, self.buf_height as f32);
         for sphere in &mut self.spheres {
             sphere.velocity.0 *= 0.9;
             sphere.velocity.1 *= 0.9;
             sphere.position.0 += sphere.velocity.0;
             sphere.position.1 += sphere.velocity.1;
+
+            apply_edge_bounce(sphere, bounds, &self.params);
 
             let (_, phase_speed) = sphere.pulse_params(&self.params);
             sphere.pulse_phase = (sphere.pulse_phase + phase_speed) % std::f32::consts::TAU;
@@ -845,6 +868,75 @@ mod tests {
             renderer.sync_spheres(&agents, (50.0, 50.0));
         }
         assert!(renderer.spheres[0].base_radius > 12.0, "should grow with tokens");
+    }
+
+    // --- Edge bounce tests ---
+
+    #[test]
+    fn test_edge_bounce_left_wall() {
+        let params = BloomParams::default();
+        let mut s = Sphere::new("a".into(), (-5.0, 50.0), (255, 0, 0));
+        s.base_radius = 12.0;
+        s.velocity = (-3.0, 0.0);
+        apply_edge_bounce(&mut s, (200.0, 200.0), &params);
+        assert!(s.position.0 >= s.effective_radius(&params));
+        assert!(s.velocity.0 > 0.0, "x velocity should be reflected positive");
+    }
+
+    #[test]
+    fn test_edge_bounce_right_wall() {
+        let params = BloomParams::default();
+        let mut s = Sphere::new("a".into(), (195.0, 50.0), (255, 0, 0));
+        s.base_radius = 12.0;
+        s.velocity = (3.0, 0.0);
+        apply_edge_bounce(&mut s, (200.0, 200.0), &params);
+        assert!(s.position.0 <= 200.0 - s.effective_radius(&params));
+        assert!(s.velocity.0 < 0.0, "x velocity should be reflected negative");
+    }
+
+    #[test]
+    fn test_edge_bounce_top_wall() {
+        let params = BloomParams::default();
+        let mut s = Sphere::new("a".into(), (50.0, -5.0), (255, 0, 0));
+        s.base_radius = 12.0;
+        s.velocity = (0.0, -3.0);
+        apply_edge_bounce(&mut s, (200.0, 200.0), &params);
+        assert!(s.position.1 >= s.effective_radius(&params));
+        assert!(s.velocity.1 > 0.0, "y velocity should be reflected positive");
+    }
+
+    #[test]
+    fn test_edge_bounce_bottom_wall() {
+        let params = BloomParams::default();
+        let mut s = Sphere::new("a".into(), (50.0, 195.0), (255, 0, 0));
+        s.base_radius = 12.0;
+        s.velocity = (0.0, 3.0);
+        apply_edge_bounce(&mut s, (200.0, 200.0), &params);
+        assert!(s.position.1 <= 200.0 - s.effective_radius(&params));
+        assert!(s.velocity.1 < 0.0, "y velocity should be reflected negative");
+    }
+
+    #[test]
+    fn test_edge_bounce_no_effect_when_inside() {
+        let params = BloomParams::default();
+        let mut s = Sphere::new("a".into(), (100.0, 100.0), (255, 0, 0));
+        s.base_radius = 12.0;
+        s.velocity = (5.0, -3.0);
+        let vel_before = s.velocity;
+        apply_edge_bounce(&mut s, (200.0, 200.0), &params);
+        assert_eq!(s.velocity, vel_before, "should not change velocity when inside bounds");
+    }
+
+    #[test]
+    fn test_edge_bounce_restitution_loses_energy() {
+        let params = BloomParams::default();
+        let mut s = Sphere::new("a".into(), (-5.0, 50.0), (255, 0, 0));
+        s.base_radius = 12.0;
+        s.velocity = (-10.0, 0.0);
+        apply_edge_bounce(&mut s, (200.0, 200.0), &params);
+        // Reflected velocity should be less than original due to restitution
+        assert!(s.velocity.0 < 10.0, "bounce should lose energy, got {}", s.velocity.0);
+        assert!(s.velocity.0 > 0.0, "should still be moving away from wall");
     }
 
     // --- Physics edge cases ---
