@@ -30,7 +30,7 @@ claude-goggles clean
 
 ## How it works
 
-Claude Code hooks pipe event JSON over a Unix Domain Socket (`~/.claude-goggles/goggles.sock`). The TUI listens on that socket, parses incoming events, updates an in-memory agent tree, and re-renders at ~10fps.
+Claude Code hooks pipe event JSON over a Unix Domain Socket (`~/.claude-goggles/goggles.sock`). The TUI listens on that socket, parses incoming events, updates an in-memory agent tree, and re-renders at ~60fps.
 
 Five hook events are captured: `PreToolUse`, `PostToolUse`, `SubagentStart`, `SubagentStop`, and `Stop`.
 
@@ -41,8 +41,12 @@ The hooks are silent no-ops when the TUI isn't running — Claude Code is never 
 | Key | Action |
 |-----|--------|
 | `q` / `Ctrl+C` | Quit |
-| `↑↓` / `j/k` | Scroll |
-| `c` | Collapse/expand subtrees |
+| `v` | Toggle visualization (tree / bloom) |
+| `↑↓` / `j/k` | Scroll (tree mode) |
+| `c` | Collapse/expand subtrees (tree mode) |
+| `[` / `]` | Cycle bloom parameter |
+| `+` / `-` | Adjust selected parameter |
+| `r` | Reset bloom parameters to defaults |
 
 ## License
 
