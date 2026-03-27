@@ -5,7 +5,7 @@ use crate::model::TokenUsage;
 
 /// Read a JSONL transcript file and sum all usage fields.
 /// Returns None if the file can't be read or contains no usage data.
-pub fn parse_transcript_usage(path: &Path) -> Option<TokenUsage> {
+pub(crate) fn parse_transcript_usage(path: &Path) -> Option<TokenUsage> {
     let content = fs::read_to_string(path).ok()?;
     let mut input_total: u64 = 0;
     let mut output_total: u64 = 0;

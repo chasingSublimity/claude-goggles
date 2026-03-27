@@ -5,7 +5,7 @@ use crate::model::{Agent, AgentStatus, AgentTree};
 use super::Renderer;
 use super::footer::{format_tokens, count_agents, sum_tokens};
 
-pub struct TreeViewRenderer;
+pub(crate) struct TreeViewRenderer;
 
 impl Renderer for TreeViewRenderer {
     fn render(&mut self, tree: &AgentTree, frame: &mut Frame, scroll_offset: usize, selected: usize) {

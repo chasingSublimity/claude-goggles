@@ -27,7 +27,7 @@ const PARAM_COUNT: usize = 8;
 
 /// Tunable parameters for the bloom visualization (sphere sizes, bloom spread, physics).
 #[derive(Clone)]
-pub struct BloomParams {
+pub(crate) struct BloomParams {
     pub radius_min: f32,
     pub radius_max: f32,
     pub bloom_spread_running: f32,
@@ -98,7 +98,7 @@ impl BloomParams {
         }
     }
 
-    pub fn nudge(&mut self, up: bool) {
+    pub(crate) fn nudge(&mut self, up: bool) {
         let idx = self.selected;
         let step = Self::STEPS[idx];
         let val = self.field_mut(idx);
@@ -109,11 +109,11 @@ impl BloomParams {
         }
     }
 
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         *self = Self::default();
     }
 
-    pub fn cycle(&mut self, forward: bool) {
+    pub(crate) fn cycle(&mut self, forward: bool) {
         if forward {
             self.selected = (self.selected + 1) % PARAM_COUNT;
         } else {
@@ -121,15 +121,15 @@ impl BloomParams {
         }
     }
 
-    pub fn param_name(&self) -> &str {
+    pub(crate) fn param_name(&self) -> &str {
         Self::NAMES[self.selected]
     }
 
-    pub fn param_value(&self) -> f32 {
+    pub(crate) fn param_value(&self) -> f32 {
         self.field(self.selected)
     }
 
-    pub fn bloom_spread_completed(&self) -> f32 {
+    pub(crate) fn bloom_spread_completed(&self) -> f32 {
         self.bloom_spread_idle * 0.625
     }
 }
@@ -270,7 +270,7 @@ fn apply_repulsion(a: &mut Sphere, b: &mut Sphere, params: &BloomParams) {
     }
 }
 
-pub struct BloomRenderer {
+pub(crate) struct BloomRenderer {
     spheres: Vec<Sphere>,
     known_agents: HashSet<String>,
     color_index: usize,
@@ -287,7 +287,7 @@ impl Default for BloomRenderer {
 }
 
 impl BloomRenderer {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             spheres: Vec::new(),
             known_agents: HashSet::new(),

@@ -3,14 +3,14 @@ use std::time::Instant;
 
 /// Input and output token counts for an agent's session.
 #[derive(Debug, Clone)]
-pub struct TokenUsage {
+pub(crate) struct TokenUsage {
     pub input: u64,
     pub output: u64,
 }
 
 /// The current activity state of an agent.
 #[derive(Debug, Clone)]
-pub enum AgentStatus {
+pub(crate) enum AgentStatus {
     Idle,
     Running { tool_name: String, key_arg: String },
     Completed,
@@ -18,7 +18,7 @@ pub enum AgentStatus {
 
 /// A single agent node in the agent tree, with its status, timing, and children.
 #[derive(Debug, Clone)]
-pub struct Agent {
+pub(crate) struct Agent {
     pub id: String,
     pub task: String,
     pub status: AgentStatus,
@@ -30,7 +30,7 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(id: String, task: String) -> Self {
+    pub(crate) fn new(id: String, task: String) -> Self {
         Self {
             id,
             task,
@@ -44,7 +44,7 @@ impl Agent {
     }
 
     /// Find a mutable reference to an agent by ID, searching recursively.
-    pub fn find_mut(&mut self, id: &str) -> Option<&mut Agent> {
+    pub(crate) fn find_mut(&mut self, id: &str) -> Option<&mut Agent> {
         if self.id == id {
             return Some(self);
         }
@@ -57,7 +57,7 @@ impl Agent {
     }
 
     /// Collect all agents in the tree as a flat list (depth-first).
-    pub fn all_agents(&self) -> Vec<&Agent> {
+    pub(crate) fn all_agents(&self) -> Vec<&Agent> {
         let mut result = vec![self];
         for child in &self.children {
             result.extend(child.all_agents());
@@ -68,7 +68,7 @@ impl Agent {
 
 /// The top-level data structure tracking an entire Claude Code session's agent hierarchy.
 #[derive(Debug)]
-pub struct AgentTree {
+pub(crate) struct AgentTree {
     pub session_id: Option<String>,
     pub root: Option<Agent>,
     pub dropped_events: u64,
@@ -77,7 +77,7 @@ pub struct AgentTree {
 }
 
 impl AgentTree {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             session_id: None,
             root: None,
@@ -86,7 +86,7 @@ impl AgentTree {
         }
     }
 
-    pub fn find_agent_mut(&mut self, agent_id: Option<&str>) -> Option<&mut Agent> {
+    pub(crate) fn find_agent_mut(&mut self, agent_id: Option<&str>) -> Option<&mut Agent> {
         let root = self.root.as_mut()?;
         match agent_id {
             None => Some(root),
@@ -96,14 +96,14 @@ impl AgentTree {
 
     /// Return a mutable reference to the nth visible agent (depth-first order).
     /// Respects collapsed state — children of collapsed agents are skipped.
-    pub fn nth_visible_agent_mut(&mut self, n: usize) -> Option<&mut Agent> {
+    pub(crate) fn nth_visible_agent_mut(&mut self, n: usize) -> Option<&mut Agent> {
         let root = self.root.as_mut()?;
         let mut counter = 0;
         nth_visible_recursive(root, n, &mut counter)
     }
 
     /// Count the number of visible agents (respecting collapsed state).
-    pub fn visible_agent_count(&self) -> usize {
+    pub(crate) fn visible_agent_count(&self) -> usize {
         match &self.root {
             None => 0,
             Some(root) => count_visible(root),

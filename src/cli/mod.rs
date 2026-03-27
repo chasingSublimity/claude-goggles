@@ -22,11 +22,11 @@ fn settings_path() -> anyhow::Result<PathBuf> {
     Ok(home_dir()?.join(".claude").join("settings.json"))
 }
 
-pub fn socket_dir() -> anyhow::Result<PathBuf> {
+pub(crate) fn socket_dir() -> anyhow::Result<PathBuf> {
     Ok(home_dir()?.join(".claude-goggles"))
 }
 
-pub fn init() -> anyhow::Result<()> {
+pub(crate) fn init() -> anyhow::Result<()> {
     // Ensure socket dir exists
     let sock_dir = socket_dir()?;
     fs::create_dir_all(&sock_dir)?;
@@ -49,7 +49,7 @@ pub fn init() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn clean() -> anyhow::Result<()> {
+pub(crate) fn clean() -> anyhow::Result<()> {
     let path = settings_path()?;
     if path.exists() {
         let content = fs::read_to_string(&path)?;

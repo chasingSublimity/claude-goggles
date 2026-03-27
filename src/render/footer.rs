@@ -1,7 +1,7 @@
 use crate::model::{Agent, AgentStatus, AgentTree};
 
 /// Format a token count for display (e.g., "500 tok" or "3.1k tok").
-pub fn format_tokens(total: u64) -> String {
+pub(crate) fn format_tokens(total: u64) -> String {
     if total >= 1000 {
         format!("{:.1}k tok", total as f64 / 1000.0)
     } else {
@@ -10,7 +10,7 @@ pub fn format_tokens(total: u64) -> String {
 }
 
 /// Count (active, total) agents in the tree.
-pub fn count_agents(tree: &AgentTree) -> (usize, usize) {
+pub(crate) fn count_agents(tree: &AgentTree) -> (usize, usize) {
     match &tree.root {
         None => (0, 0),
         Some(root) => {
@@ -26,7 +26,7 @@ pub fn count_agents(tree: &AgentTree) -> (usize, usize) {
 }
 
 /// Sum all token usage across the tree.
-pub fn sum_tokens(tree: &AgentTree) -> u64 {
+pub(crate) fn sum_tokens(tree: &AgentTree) -> u64 {
     match &tree.root {
         None => 0,
         Some(root) => sum_tokens_recursive(root),

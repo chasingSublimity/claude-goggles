@@ -3,12 +3,12 @@ use tokio::sync::mpsc;
 
 use super::HookEvent;
 
-pub struct SocketListener {
+pub(crate) struct SocketListener {
     path: PathBuf,
 }
 
 impl SocketListener {
-    pub fn new(path: PathBuf) -> Self {
+    pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
     }
 
@@ -21,7 +21,7 @@ impl SocketListener {
 
     /// Start listening. Sends parsed HookEvents through the channel.
     /// Runs until the channel is closed.
-    pub async fn listen(&self, tx: mpsc::Sender<HookEvent>) -> std::io::Result<()> {
+    pub(crate) async fn listen(&self, tx: mpsc::Sender<HookEvent>) -> std::io::Result<()> {
         self.cleanup_stale();
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
